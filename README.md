@@ -1,2 +1,253 @@
-# 2026 CityUHK(DG) Hackathon
----
+# AI Agent Development Pipeline
+
+This repository implements an **AI-Agent-based full-cycle IT function automated development system** for the CityUHK(DG) hackathon. Given a Markdown product specification, the platform creates a batch and runs three lightweight agents:
+
+1. `DesignAgent` generates `overview_design.md` and `design_manifest.json`.
+2. `CodeAgent` generates a runnable Python business application under `src/` plus `code_manifest.json`.
+3. `TestAgent` generates pytest tests under `tests/` plus `test_plan.md`.
+
+The core Orchestrator, Agent abstraction, state management, artifact protocol, execution logging, validators, and retry mechanism are implemented by this project itself. No heavyweight agent frameworks such as LangChain, CrewAI, AutoGen, or LangGraph are used.
+
+## Hackathon Task Understanding
+
+The target is not just a vehicle reservation app. The project is an automated development pipeline that can transform a Markdown product specification into design artifacts, application source code, unit tests, status files, and execution logs. The employee temporary vehicle reservation system is used as the validation case.
+
+The implementation is template-first for reliability: the LLM can assist with design text and manifests, but generated business code is produced from a stable Python template so the demo can run with or without an API key.
+
+## Architecture
+
+```text
+Markdown spec
+  -> FastAPI / Streamlit upload
+  -> Orchestrator batch
+  -> DesignAgent
+  -> CodeAgent
+  -> TestAgent
+  -> validators
+  -> docs/已生成/{batch_id}/batch_status.json
+  -> docs/已生成/{batch_id}/execution_log.json
+```
+
+Main directories:
+
+```text
+app/                 platform backend: API, orchestrator, agents, adapters, storage, validators
+src/                 current generated business system
+tests/               generated and platform pytest tests
+ui/                  Streamlit control panel
+prompts/             agent prompts
+docs/待生成/          uploaded Markdown specs
+docs/已生成/{batch}/  batch status, logs, and artifacts
+```
+
+## Multi-Agent Design
+
+- `DesignAgent`: reads `spec.md`, creates high-level design and a structured manifest containing modules, entities, rules, APIs, CSV tables, and validation rules.
+- `CodeAgent`: reads design artifacts and writes a runnable FastAPI business system under `src/`.
+- `TestAgent`: reads design/code artifacts and writes deterministic pytest tests under `tests/`.
+- `MockLLMAdapter`: deterministic fallback for local demos and tests when `OPENAI_API_KEY` is missing.
+- `OpenAIAdapter`: optional OpenAI SDK integration, configured only through environment variables.
+
+Agents communicate through persisted Markdown and JSON artifacts rather than hidden in-memory prompts.
+
+## Orchestrator State Management
+
+The Orchestrator runs nodes in dependency order:
+
+```text
+design -> code -> test
+```
+
+Each batch writes:
+
+- `docs/已生成/{batch_id}/batch_status.json`
+- `docs/已生成/{batch_id}/execution_log.json`
+
+State models are Pydantic v2 models:
+
+- `ArtifactRef`
+- `NodeState`
+- `BatchState`
+- `ExecutionLogEntry`
+
+Node statuses include `queued`, `running`, `succeeded`, `failed`, and `skipped`. Failed nodes can be retried individually, and retry count is controlled by `MAX_RETRIES`.
+
+## Generated Business System
+
+The validation business system is an Employee Temporary Vehicle Reservation System. It supports:
+
+- Four campuses: Weifang, Qingdao, Rongcheng, Dongguan
+- Campus quota and enable/disable configuration
+- Reservation application
+- Reservation cancellation with quota release
+- Advance payment
+- Ketuo reservation archive mock
+- CSV-based persistence, no SQL database
+- FastAPI endpoints for reservation, cancellation, payment, query, and health
+
+CSV tables:
+
+- `data/campus_configs.csv`
+- `data/reservations.csv`
+- `data/ketuo_reservation_archive.csv`
+- `data/payment_records.csv`
+- `data/internal_vehicle_archive.csv`
+
+## API Key Security
+
+API keys are never written into source code. Configuration is read from environment variables and optional local `.env`.
+
+Supported variables:
+
+```bash
+OPENAI_API_KEY=
+OPENAI_BASE_URL=
+DESIGN_MODEL=
+CODE_MODEL=
+TEST_MODEL=
+APP_ENV=dev
+MAX_RETRIES=2
+```
+
+Use `.env.example` as a template. Do not commit `.env`. If `OPENAI_API_KEY` is missing, the system falls back to `MockLLMAdapter` and the main demo pipeline still runs.
+
+Logs filter key/token-like metadata and must not print full API keys.
+
+## Installation
+
+Python 3.12+ is required.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Create local configuration:
+
+```bash
+cp .env.example .env
+```
+
+For no-key demo mode, leave `OPENAI_API_KEY` empty.
+
+## Run Backend
+
+```bash
+uvicorn app.api.main:app --reload
+```
+
+Health check:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+## Run Streamlit UI
+
+```bash
+streamlit run ui/streamlit_app.py
+```
+
+The UI provides Markdown upload, auto/manual mode selection, batch status, execution logs, artifact list, retry buttons, and artifact downloads for:
+
+- `overview_design.md`
+- `design_manifest.json`
+- `code_manifest.json`
+- `test_plan.md`
+
+## API Endpoints
+
+- `GET /health`
+- `POST /api/v1/batches`
+- `POST /api/v1/batches/{batch_id}/run`
+- `GET /api/v1/batches/{batch_id}`
+- `GET /api/v1/batches/{batch_id}/logs`
+- `GET /api/v1/batches/{batch_id}/artifacts`
+- `GET /api/v1/batches/{batch_id}/download?path=...`
+- `POST /api/v1/batches/{batch_id}/retry/{node_id}`
+- `POST /api/v1/validate`
+
+## Tests
+
+Run:
+
+```bash
+pytest -q
+pytest --cov=app --cov=src --cov-branch --cov-report=term-missing
+```
+
+Current local validation:
+
+- `16 passed`
+- Coverage: `82%`
+
+Tests do not require a real OpenAI API key.
+
+## Demonstration Workflow
+
+1. Start backend: `uvicorn app.api.main:app --reload`
+2. Start UI: `streamlit run ui/streamlit_app.py`
+3. Upload the Markdown product specification for the employee temporary vehicle reservation system.
+4. Select `auto`.
+5. Click `Start batch`.
+6. Watch nodes move through `design`, `code`, and `test`.
+7. Inspect `batch_status.json`, `execution_log.json`, and generated artifacts.
+8. Run `pytest -q`.
+9. Demonstrate business scenarios:
+   - successful reservation plus advance payment
+   - duplicate plate or quota-exceeded failure
+   - cancellation releases quota
+
+The generated business app can also run directly:
+
+```bash
+uvicorn src.api:app --reload
+```
+
+## Open-Source Libraries Used
+
+This project uses open-source libraries including:
+
+- FastAPI
+- Uvicorn
+- Streamlit
+- Pydantic v2
+- OpenAI Python SDK
+- python-dotenv
+- pytest
+- pytest-cov / coverage
+- requests
+
+The core Orchestrator, Agent abstraction, state machine, artifact protocol, and retry mechanism are implemented in this repository.
+
+## Four-Person Team Division Template
+
+- Backend/API engineer: FastAPI endpoints, API errors, smoke validation.
+- Agent/orchestration engineer: Orchestrator, state models, retry, logs, validators.
+- Business-system engineer: CSV repository, reservation service, generated app template.
+- QA/demo engineer: pytest coverage, Streamlit UI, README, demo script, Git safety checks.
+
+## Safe Submission To Remote Repository
+
+Before pushing, confirm secrets and generated files are not staged:
+
+```bash
+git status
+git diff --cached
+git grep "sk-"
+```
+
+If any suspected API key, token, or secret is found, do not commit it. Remove it from tracked files, rotate the leaked secret in the provider console, then recommit clean files.
+
+Suggested submission commands:
+
+```bash
+git status
+git add .
+git commit -m "Initial implementation of AI agent development pipeline"
+git remote add origin <YOUR_REMOTE_URL>
+git push -u origin main
+```
+
+`.env`, `.venv/`, caches, coverage reports, runtime CSV data, generated batch artifacts, and build outputs are ignored by `.gitignore`.
