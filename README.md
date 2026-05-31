@@ -175,9 +175,10 @@ cp .env.example .env
 uvicorn app.api.main:app --reload --reload-dir app
 ```
 
-### 4. 启动控制台 UI
+### 4. 启动控制台 UI（新开一个终端）
 
 ```bash
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 streamlit run ui/streamlit_app.py
 ```
 
