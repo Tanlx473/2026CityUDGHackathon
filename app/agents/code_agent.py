@@ -684,16 +684,17 @@ class CodeAgent(BaseAgent):
         spec_path = input_context["spec_path"]
         result = self._generate_code(batch_id=batch_id, spec_path=spec_path)
 
-        src_dir = self.store.root_dir / "src"
+        out_root = self.store.output_batch_dir(batch_id)
+        src_dir = out_root / "src"
         if src_dir.exists():
             shutil.rmtree(src_dir)
         src_dir.mkdir(parents=True, exist_ok=True)
-        frontend_dir = self.store.root_dir / "frontend"
+        frontend_dir = out_root / "frontend"
         if frontend_dir.exists():
             shutil.rmtree(frontend_dir)
         written_refs = []
         for generated_file in result.files:
-            target = self._safe_generated_path(generated_file.path)
+            target = self._safe_generated_path(generated_file.path, base_dir=out_root)
             written_refs.append(self.store.write_text(target, generated_file.content))
 
         code_manifest = self._code_manifest(result)
@@ -720,6 +721,8 @@ class CodeAgent(BaseAgent):
                 for path in sorted(frontend_snapshot_dir.rglob("*"))
                 if path.is_file()
             ]
+        (out_root / "README.md").write_text(self._readme(batch_id, code_manifest), encoding="utf-8")
+
         return [manifest_ref, *written_refs, *snapshot_refs, *frontend_snapshot_refs]
 
     def _generate_code(self, *, batch_id: str, spec_path: str) -> CodeGenerationResult:
@@ -780,7 +783,7 @@ class CodeAgent(BaseAgent):
             return ""
         return path.read_text(encoding="utf-8")
 
-    def _safe_generated_path(self, generated_path: str) -> Path:
+    def _safe_generated_path(self, generated_path: str, base_dir: Path | None = None) -> Path:
         candidate = Path(generated_path)
         if candidate.is_absolute():
             raise ValueError(f"Generated path must be relative: {generated_path}")
@@ -788,8 +791,9 @@ class CodeAgent(BaseAgent):
             raise ValueError(f"Unsafe generated path: {generated_path}")
         if not candidate.parts or candidate.parts[0] not in {"src", "frontend"}:
             raise ValueError(f"Generated path must be under src/ or frontend/: {generated_path}")
-        target = (self.store.root_dir / candidate).resolve()
-        allowed_root = (self.store.root_dir / candidate.parts[0]).resolve()
+        root = base_dir or self.store.root_dir
+        target = (root / candidate).resolve()
+        allowed_root = (root / candidate.parts[0]).resolve()
         if target != allowed_root and allowed_root not in target.parents:
             raise ValueError(f"Generated path escapes {candidate.parts[0]}/: {generated_path}")
         if candidate.parts[0] == "src" and target.suffix != ".py":
@@ -797,6 +801,45 @@ class CodeAgent(BaseAgent):
         if candidate.parts[0] == "frontend" and target.suffix not in {".html", ".css", ".js"}:
             raise ValueError(f"Generated frontend file must be .html, .css, or .js: {generated_path}")
         return target
+
+    def _readme(self, batch_id: str, manifest: dict) -> str:
+        name = manifest.get("system_name", "Generated Application")
+        has_frontend = bool(manifest.get("frontend_root"))
+        run_cmds = manifest.get("run_instructions") or ["uvicorn src.api:app --reload --reload-dir src"]
+        backend_cmd = next((c for c in run_cmds if "uvicorn" in c or "python" in c), run_cmds[0])
+        lines = [
+            f"# {name}",
+            "",
+            "> 由 AI Agent 开发流水线自动生成。批次 ID: `{batch_id}`",
+            "",
+            "## 快速启动",
+            "",
+            "```bash",
+            "pip install fastapi uvicorn pydantic",
+            f"{backend_cmd}",
+            "```",
+            "",
+            "后端文档：http://127.0.0.1:8000/docs",
+            "",
+        ]
+        if has_frontend:
+            lines += ["## 前端", "", "直接用浏览器打开 `frontend/index.html`，无需额外服务。", ""]
+        lines += [
+            "## 运行测试",
+            "",
+            "```bash",
+            "pytest tests/",
+            "```",
+            "",
+            "## 目录结构",
+            "",
+            "```",
+            "src/         后端 Python 源代码",
+        ]
+        if has_frontend:
+            lines.append("frontend/    前端 HTML/CSS/JS")
+        lines += ["tests/       pytest 测试套件", "```", ""]
+        return "\n".join(lines)
 
     def _code_manifest(self, result: CodeGenerationResult) -> dict[str, object]:
         manifest: dict[str, object] = {"strategy": "llm-structured-generation"}

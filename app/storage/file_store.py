@@ -17,8 +17,10 @@ class FileStore:
         self.root_dir = (root_dir or ROOT_DIR).resolve()
         self.pending_dir = self.root_dir / "docs" / "待生成"
         self.generated_dir = self.root_dir / "docs" / "已生成"
+        self.output_dir = self.root_dir / "output"
         self.pending_dir.mkdir(parents=True, exist_ok=True)
         self.generated_dir.mkdir(parents=True, exist_ok=True)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def relpath(self, path: Path) -> str:
         return path.resolve().relative_to(self.root_dir).as_posix()
@@ -31,6 +33,11 @@ class FileStore:
 
     def batch_dir(self, batch_id: str) -> Path:
         path = self.generated_dir / batch_id
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def output_batch_dir(self, batch_id: str) -> Path:
+        path = self.output_dir / batch_id
         path.mkdir(parents=True, exist_ok=True)
         return path
 

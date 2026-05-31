@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import io
+import zipfile
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.orchestrator.best_of import BestOfSelector
@@ -171,6 +173,29 @@ def best_of_batches(payload: BestOfRequest, background_tasks: BackgroundTasks) -
         "scores": scores,
         "status": "accepted",
     }
+
+
+@app.get("/api/v1/batches/{batch_id}/package")
+def package_batch(batch_id: str) -> StreamingResponse:
+    """Bundle output/{batch_id}/ into a downloadable zip."""
+    _load_state_or_404(batch_id)
+    out_dir = store.output_batch_dir(batch_id)
+    files = [p for p in out_dir.rglob("*") if p.is_file()]
+    if not files:
+        raise HTTPException(
+            status_code=404,
+            detail={"message": "No generated package found — has the pipeline completed successfully?"},
+        )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for fp in sorted(files):
+            zf.write(fp, fp.relative_to(out_dir).as_posix())
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{batch_id}.zip"'},
+    )
 
 
 def _load_state_or_404(batch_id: str):

@@ -158,6 +158,19 @@ if batch_id:
     artifacts_response = api_request("GET", f"/api/v1/batches/{batch_id}/artifacts")
     if artifacts_response is not None:
         artifacts = artifacts_response.json()
+        if state_resp.json().get("status") == "succeeded":
+            pkg = api_request("GET", f"/api/v1/batches/{batch_id}/package")
+            if pkg is not None:
+                st.download_button(
+                    label="⬇️ Download generated code (.zip)",
+                    data=pkg.content,
+                    file_name=f"{batch_id}.zip",
+                    mime="application/zip",
+                    type="primary",
+                    use_container_width=True,
+                )
+            st.divider()
+
         st.subheader("Artifact list")
         st.dataframe(artifacts, use_container_width=True)
 

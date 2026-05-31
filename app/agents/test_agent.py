@@ -154,14 +154,15 @@ class TestAgent(BaseAgent):
         batch_id = input_context["batch_id"]
         spec_path = input_context["spec_path"]
         result = self._generate_tests(batch_id=batch_id, spec_path=spec_path)
-        generated_dir = self.store.root_dir / "tests" / "generated"
+        out_root = self.store.output_batch_dir(batch_id)
+        generated_dir = out_root / "tests" / "generated"
         if generated_dir.exists():
             shutil.rmtree(generated_dir)
         generated_dir.mkdir(parents=True, exist_ok=True)
         init_ref = self.store.write_text(generated_dir / "__init__.py", "")
         test_refs = [init_ref]
         for generated_file in result.files:
-            target = self._safe_test_path(generated_file.path)
+            target = self._safe_test_path(generated_file.path, base_dir=out_root)
             test_refs.append(self.store.write_text(target, generated_file.content))
 
         output_dir = self.batch_artifact_dir(batch_id, "单元测试")
@@ -186,7 +187,7 @@ class TestAgent(BaseAgent):
         code_manifest = self._optional_batch_text(batch_id, "代码生成", "code_manifest.json")
         if self._is_template_code_manifest(code_manifest):
             return self._template_generation_result()
-        source_index = self._source_index()
+        source_index = self._source_index(batch_id)
         user = (
             "生成完整的、确定性的 pytest 测试套件，覆盖下方 code_manifest 中记录的至少 80% 的 API 路由和业务规则。\n"
             "返回 JSON，不含 Markdown、不含 prose。每个测试文件路径必须在 tests/generated/ 下。\n"
@@ -233,15 +234,17 @@ class TestAgent(BaseAgent):
             return False
         return str(data.get("strategy", "")) == "template-fallback"
 
-    def _source_index(self) -> str:
-        src_dir = self.store.root_dir / "src"
+    def _source_index(self, batch_id: str) -> str:
+        src_dir = self.store.output_batch_dir(batch_id) / "src"
+        if not src_dir.exists():
+            src_dir = self.store.root_dir / "src"
         entries = []
         for path in sorted(src_dir.rglob("*.py")):
-            relative = path.relative_to(self.store.root_dir).as_posix()
+            relative = "src/" + path.relative_to(src_dir).as_posix()
             entries.append(relative)
         return "\n".join(f"- {entry}" for entry in entries)
 
-    def _safe_test_path(self, generated_path: str) -> Path:
+    def _safe_test_path(self, generated_path: str, base_dir: Path | None = None) -> Path:
         candidate = Path(generated_path)
         if candidate.is_absolute():
             raise ValueError(f"Generated path must be relative: {generated_path}")
@@ -249,8 +252,9 @@ class TestAgent(BaseAgent):
             raise ValueError(f"Unsafe generated path: {generated_path}")
         if len(candidate.parts) < 3 or candidate.parts[:2] != ("tests", "generated"):
             raise ValueError(f"Generated test path must be under tests/generated/: {generated_path}")
-        target = (self.store.root_dir / candidate).resolve()
-        test_root = (self.store.root_dir / "tests" / "generated").resolve()
+        root = base_dir or self.store.root_dir
+        target = (root / candidate).resolve()
+        test_root = (root / "tests" / "generated").resolve()
         if target != test_root and test_root not in target.parents:
             raise ValueError(f"Generated test path escapes tests/generated/: {generated_path}")
         if target.suffix != ".py" or not target.name.startswith("test_"):

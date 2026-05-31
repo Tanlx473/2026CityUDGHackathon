@@ -86,6 +86,7 @@ execution_log.json
 artifacts/
 generated/
 outputs/
+output/
 
 # Test and demo outputs
 reports/
