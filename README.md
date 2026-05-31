@@ -1,270 +1,238 @@
-# AI Agent Development Pipeline
+# AI Agent 全链路自动化开发系统
 
-This repository implements an **AI-Agent-based full-cycle IT function automated development system** for the CityUHK(DG) hackathon. Given a Markdown product specification, the platform creates a batch and runs three lightweight agents:
+> 2026"歌尔杯"香港城市大学（东莞）第二届黑客马拉松参赛项目
 
-1. `DesignAgent` generates `overview_design.md` and `design_manifest.json`.
-2. `CodeAgent` generates a runnable Python business application under `src/` plus `code_manifest.json`.
-3. `TestAgent` generates pytest tests under `tests/` plus `test_plan.md`.
+给定一份 Markdown 产品规格说明书，本系统自动调用三个 AI Agent 依次完成**概要设计 → 代码生成 → 测试生成**，输出可立即运行的完整应用程序（后端 + 前端 + 单元测试）。
 
-The core Orchestrator, Agent abstraction, state management, artifact protocol, execution logging, validators, and retry mechanism are implemented by this project itself. No heavyweight agent frameworks such as LangChain, CrewAI, AutoGen, or LangGraph are used.
+核心 Orchestrator、Agent 基类、状态机、Artifact 协议、重试机制、质量验证器均为本项目自研实现，**不依赖 LangChain、CrewAI、AutoGen、LangGraph 等 Agent 框架**。
 
-## Hackathon Task Understanding
+---
 
-The target is not just a vehicle reservation app. The project is an automated development pipeline that can transform a Markdown product specification into design artifacts, application source code, unit tests, status files, and execution logs. The employee temporary vehicle reservation system is used as the validation case.
+## 系统架构
 
-The implementation is template-first for reliability: the LLM can assist with design text and manifests, but generated business code is produced from a stable Python template so the demo can run with or without an API key.
-
-## Architecture
-
-```text
-Markdown spec
-  -> FastAPI / Streamlit upload
-  -> Orchestrator batch
-  -> DesignAgent
-  -> CodeAgent
-  -> TestAgent
-  -> validators
-  -> docs/已生成/{batch_id}/batch_status.json
-  -> docs/已生成/{batch_id}/execution_log.json
+```
+Markdown 产品规格说明书
+        │
+        ▼
+  FastAPI 上传接口 / Streamlit 控制台
+        │
+        ▼
+  Orchestrator（批次管理 · 状态机 · 执行日志）
+        │
+        ├─ DesignAgent  ──►  overview_design.md  +  design_manifest.json
+        │
+        ├─ CodeAgent    ──►  src/  +  frontend/  +  code_manifest.json
+        │
+        └─ TestAgent    ──►  tests/generated/  +  test_plan.md
+        │
+        ▼
+  Validator（设计完整性 · 代码可运行性 · 覆盖率 ≥ 80%）
+        │
+        ▼
+  output/{batch_id}/   ←  可下载的完整应用包（.zip）
 ```
 
-Main directories:
+### 目录结构
 
-```text
-app/                 platform backend: API, orchestrator, agents, adapters, storage, validators
-src/                 current generated business system
-tests/               generated and platform pytest tests
-ui/                  Streamlit control panel
-prompts/             agent prompts
-docs/待生成/          uploaded Markdown specs
-docs/已生成/{batch}/  batch status, logs, and artifacts
+```
+app/
+  adapters/      LLMAdapter 协议 · OpenAIAdapter · MockLLMAdapter
+  agents/        DesignAgent · CodeAgent · TestAgent（含确定性模板回退）
+  api/           FastAPI 流水线管控接口
+  orchestrator/  Orchestrator 引擎 · Pydantic 状态模型 · 执行日志 · BestOfSelector
+  storage/       FileStore（文件读写 · SHA-256 · ArtifactRef）
+  validators/    DesignArtifactValidator · CodeValidator · TestValidator
+ui/
+  streamlit_app.py   可视化控制台（上传 · 状态 · 日志 · 重试 · 下载）
+prompts/             各 Agent 系统提示词
+docs/待生成/          上传的规格说明书
+docs/已生成/          各批次状态文件 · 日志 · Artifact 引用
+output/              各批次生成的可运行代码
 ```
 
-## Multi-Agent Design
+---
 
-- `DesignAgent`: reads `spec.md`, creates high-level design and a structured manifest containing modules, entities, rules, APIs, CSV tables, and validation rules.
-- `CodeAgent`: reads design artifacts and writes a runnable FastAPI business system under `src/`.
-- `TestAgent`: reads design/code artifacts and writes deterministic pytest tests under `tests/`.
-- `MockLLMAdapter`: deterministic fallback for local demos and tests when `OPENAI_API_KEY` is missing.
-- `OpenAIAdapter`: optional OpenAI SDK integration, configured only through environment variables.
+## 三 Agent 职责与通信契约
 
-Agents communicate through persisted Markdown and JSON artifacts rather than hidden in-memory prompts.
+Agent 之间**禁止**通过内存传递内容；全部通信通过持久化 Artifact 文件（`ArtifactRef` 引用）进行。
 
-## Orchestrator State Management
+### DesignAgent
 
-The Orchestrator runs nodes in dependency order:
+- **输入**：产品规格说明书（`spec.md`）
+- **输出**：`overview_design.md`（八章结构概要设计）+ `design_manifest.json`（结构化清单）
+- `design_manifest.json` 必须包含：`system_name`、`modules`、`entities`、`business_rules`、`api_endpoints`、`csv_tables`、`validation_rules`、`frontend_requirements`、`pages`、`acceptance_criteria`
 
-```text
-design -> code -> test
-```
+### CodeAgent
 
-Each batch writes:
+- **输入**：`overview_design.md` + `design_manifest.json`（设计文档为主权威）
+- **输出**：`src/*.py`（FastAPI 后端）+ `frontend/`（规格书要求 Web 界面时）+ `code_manifest.json`
+- 生成代码写入 `output/{batch_id}/`，快照同步到 `docs/已生成/{batch_id}/代码生成/`
+- 无法调用 LLM 时自动回退到确定性内置模板，**无 API Key 也可完整演示**
 
-- `docs/已生成/{batch_id}/batch_status.json`
-- `docs/已生成/{batch_id}/execution_log.json`
+### TestAgent
 
-State models are Pydantic v2 models:
+- **输入**：`overview_design.md` + `design_manifest.json` + `code_manifest.json` + 源文件路径索引
+- **输出**：`tests/generated/` 下四类 pytest 文件 + `test_plan.md`
+  - `test_api_routes.py`：每条路由的正常路径 + 每个错误场景
+  - `test_business_rules.py`：每条业务规则的满足 + 违反
+  - `test_storage.py`：写操作后验证 CSV 行内容
+  - `test_frontend_contract.py`：前端文件存在性 + HTML 控件检查
 
-- `ArtifactRef`
-- `NodeState`
-- `BatchState`
-- `ExecutionLogEntry`
+---
 
-Node statuses include `queued`, `running`, `succeeded`, `failed`, and `skipped`. Failed nodes can be retried individually, and retry count is controlled by `MAX_RETRIES`.
+## Orchestrator 状态机
 
-## Generated Business System
+### 批次状态
 
-The validation business system is an Employee Temporary Vehicle Reservation System. It supports:
+| 状态 | 含义 |
+|------|------|
+| `queued` | 批次已创建，等待启动 |
+| `running` | 正在执行某个节点 |
+| `paused` | 手动模式下等待用户审批 |
+| `succeeded` | 全部节点执行成功 |
+| `failed` | 某节点超出重试次数后失败 |
 
-- Four campuses: Weifang, Qingdao, Rongcheng, Dongguan
-- Campus quota and enable/disable configuration
-- Reservation application
-- Reservation cancellation with quota release
-- Advance payment
-- Ketuo reservation archive mock
-- CSV-based persistence, no SQL database
-- FastAPI endpoints for reservation, cancellation, payment, query, and health
+### 节点重试
 
-The committed validation app writes runtime CSV tables under `data/generated_business_system/`:
+从任意失败节点重试时，该节点及其所有下游节点自动重置为 `queued` 并重新执行。重试次数上限由 `MAX_RETRIES` 控制（默认 2 次）。
 
-- `employees.csv`
-- `admins.csv`
-- `parks.csv`
-- `quota_rules.csv`
-- `reservations.csv`
-- `ketuo_internal_vehicles.csv`
-- `ketuo_reserved_vehicles.csv`
-- `ketuo_payments.csv`
-- `operation_logs.csv`
+### 持久化产物
 
-The no-key fallback template generated by `CodeAgent` also uses CSV persistence, with these simplified tables:
+每个批次写入 `docs/已生成/{batch_id}/`：
 
-- `data/campus_configs.csv`
-- `data/reservations.csv`
-- `data/ketuo_reservation_archive.csv`
-- `data/payment_records.csv`
-- `data/internal_vehicle_archive.csv`
+- `batch_status.json`：当前状态、各节点状态、重试次数、质量检查结果
+- `execution_log.json`：时间戳、事件类型、节点 ID、耗时（ms）、LLM 模型信息、错误类名
 
-## API Key Security
+---
 
-API keys are never written into source code. Configuration is read from environment variables and optional local `.env`.
+## 质量验证器
 
-Supported variables:
+每个节点成功执行后自动运行对应验证器，结果写入 `batch_status.json` 的 `quality_check_result` 字段。
 
-```bash
-OPENAI_API_KEY=
-OPENAI_BASE_URL=
-DESIGN_MODEL=
-CODE_MODEL=
-TEST_MODEL=
-APP_ENV=dev
-MAX_RETRIES=2
-LLM_STRICT=
-```
+| 验证器 | 检查内容 |
+|--------|----------|
+| `DesignArtifactValidator` | `overview_design.md` 非空；`design_manifest.json` 包含全部 7 个必需字段 |
+| `CodeValidator` | `src/` 存在且含 `__init__.py` + `api.py`；所有 `.py` 文件语法正确；`src.api.app` 可导入；规格书要求前端时检查 `frontend/index.html` 含 `form` 和 `button` |
+| `TestValidator` | `tests/generated/test_*.py` 存在；执行 `pytest --cov`，覆盖率 ≥ 80%；低于阈值节点标记 `failed` |
 
-Use `.env.example` as a template. Do not commit `.env`. If `OPENAI_API_KEY` is missing, the system falls back to `MockLLMAdapter` and the main demo pipeline still runs.
-When `OPENAI_API_KEY` is set, `LLM_STRICT` defaults to enabled so API failures are surfaced instead of silently using fallback output. Set `LLM_STRICT=false` only when you explicitly want fallback behavior during demos.
+---
 
-Logs filter key/token-like metadata and must not print full API keys.
+## 流水线管控 API
 
-## Installation
+后端：`http://127.0.0.1:8000` · Swagger 文档：`http://127.0.0.1:8000/docs`
 
-Python 3.12+ is required.
+| 方法 | 路径 | 功能 |
+|------|------|------|
+| `GET` | `/health` | 健康检查 |
+| `GET` | `/api/v1/batches` | 列出所有批次（最新优先） |
+| `POST` | `/api/v1/batches` | 上传规格说明书，创建新批次 |
+| `POST` | `/api/v1/batches/{id}/run` | 启动批次（自动模式） |
+| `GET` | `/api/v1/batches/{id}` | 查询批次完整状态 |
+| `GET` | `/api/v1/batches/{id}/logs` | 获取执行日志 |
+| `GET` | `/api/v1/batches/{id}/artifacts` | 列出批次全部 Artifact |
+| `GET` | `/api/v1/batches/{id}/download?path=...` | 下载单个 Artifact 文件 |
+| `GET` | `/api/v1/batches/{id}/package` | 打包下载完整生成代码（.zip） |
+| `POST` | `/api/v1/batches/{id}/advance` | 手动模式：审批并执行下一节点 |
+| `POST` | `/api/v1/batches/{id}/retry/{node_id}` | 从指定节点重试（下游自动重置） |
+| `POST` | `/api/v1/validate` | 对已完成批次执行烟雾验证 |
+| `GET` | `/api/v1/batches/{id}/score` | 对设计产物打分（0–100） |
+| `POST` | `/api/v1/batches/best-of` | 多批次竞选：取设计评分最高者重新生成代码与测试 |
+
+---
+
+## 快速开始
+
+### 1. 安装依赖
+
+Python 3.12+ 必须。
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Create local configuration:
+### 2. 配置环境变量
 
 ```bash
 cp .env.example .env
+# 编辑 .env，按需填入以下变量
 ```
 
-For no-key demo mode, leave `OPENAI_API_KEY` empty.
+| 变量 | 说明 |
+|------|------|
+| `OPENAI_API_KEY` | 留空则使用 MockLLMAdapter，无 key 仍可完整演示 |
+| `OPENAI_BASE_URL` | 可选，兼容任意 OpenAI 协议接口 |
+| `DESIGN_MODEL` / `CODE_MODEL` / `TEST_MODEL` | 各节点使用的模型，留空由适配器决定 |
+| `MAX_RETRIES` | 每节点最大重试次数，默认 `2` |
+| `LLM_STRICT` | 有 key 时默认 `true`；`false` 表示 LLM 失败时降级到内置模板 |
 
-## Run Backend
+> API Key 仅从环境变量读取，禁止写入任何源文件；执行日志已过滤 key/token 类字段。
+
+### 3. 启动后端
 
 ```bash
 uvicorn app.api.main:app --reload --reload-dir app
 ```
 
-Health check:
-
-```bash
-curl http://127.0.0.1:8000/health
-```
-
-## Run Streamlit UI
+### 4. 启动控制台 UI
 
 ```bash
 streamlit run ui/streamlit_app.py
 ```
 
-The UI provides Markdown upload, auto/manual mode selection, batch status, execution logs, artifact list, retry buttons, and artifact downloads for:
+浏览器访问：`http://localhost:8501`
 
-- `overview_design.md`
-- `design_manifest.json`
-- `code_manifest.json`
-- `test_plan.md`
+---
 
-## API Endpoints
+## 演示流程
 
-- `GET /health`
-- `POST /api/v1/batches`
-- `POST /api/v1/batches/{batch_id}/run`
-- `GET /api/v1/batches/{batch_id}`
-- `GET /api/v1/batches/{batch_id}/logs`
-- `GET /api/v1/batches/{batch_id}/artifacts`
-- `GET /api/v1/batches/{batch_id}/download?path=...`
-- `POST /api/v1/batches/{batch_id}/retry/{node_id}`
-- `POST /api/v1/validate`
-
-## Tests
-
-Run:
+1. 在 Streamlit 控制台上传产品规格说明书（`.md` 文件）
+2. 选择运行模式：
+   - **auto**：三个节点自动依次执行
+   - **manual**：每个节点执行前暂停，需点击"审批"后继续，适合现场讲解
+3. 点击"Create batch"，观察节点状态依次变为 `succeeded`
+4. 节点完成后可查看执行日志、各 Artifact 内容，或一键下载完整代码包（.zip）
+5. 运行生成的应用：
 
 ```bash
-# Validate the current generated business app after a pipeline run.
-pytest -q tests/generated
-pytest -q tests/generated --cov=src --cov-branch --cov-report=term-missing
-
-# Validate platform/orchestrator code.
-pytest -q tests/test_state_and_storage.py tests/test_orchestrator_and_api.py
+cd output/<batch_id>
+uvicorn src.api:app --reload      # 启动生成的后端
+# 用浏览器直接打开 frontend/index.html（如有前端）
 ```
 
-`tests/generated/` is replaced by each `TestAgent` run and should match the current generated `src/` tree. Template-specific tests such as `tests/test_business_reservation.py` are skipped automatically when `src/` has been replaced by a dynamic LLM-generated app.
+> 演示用验证用例：赛题提供的《员工临时车辆预约程序》产品规格说明书，位于 `problem/` 目录。
 
-Most tests do not require a real OpenAI API key. Tests that exercise the OpenAI adapter use fake clients unless you start the full pipeline from the UI/API.
+---
 
-The pipeline validator enforces `--cov-fail-under=80` for generated tests. Each node writes its validator result into `quality_check_result` inside `batch_status.json`.
+## 测试
 
-## Demonstration Workflow
-
-1. Start backend: `uvicorn app.api.main:app --reload --reload-dir app`
-2. Start UI: `streamlit run ui/streamlit_app.py`
-3. Upload the Markdown product specification for the employee temporary vehicle reservation system.
-4. Select `auto`.
-5. Click `Start batch`.
-6. Watch nodes move through `design`, `code`, and `test`.
-7. Inspect `batch_status.json`, `execution_log.json`, and generated artifacts.
-8. Run `pytest -q tests/generated`.
-9. Demonstrate business scenarios:
-   - successful reservation plus advance payment
-   - duplicate plate or quota-exceeded failure
-   - cancellation releases quota
-
-The generated business app can also run directly:
+### 测试流水线平台本身
 
 ```bash
-uvicorn src.api:app --reload
+pytest tests/test_state_and_storage.py tests/test_orchestrator_and_api.py -q
 ```
 
-## Open-Source Libraries Used
-
-This project uses open-source libraries including:
-
-- FastAPI
-- Uvicorn
-- Streamlit
-- Pydantic v2
-- OpenAI Python SDK
-- python-dotenv
-- pytest
-- pytest-cov / coverage
-- requests
-
-The core Orchestrator, Agent abstraction, state machine, artifact protocol, and retry mechanism are implemented in this repository.
-
-## Four-Person Team Division Template
-
-- Backend/API engineer: FastAPI endpoints, API errors, smoke validation.
-- Agent/orchestration engineer: Orchestrator, state models, retry, logs, validators.
-- Business-system engineer: CSV repository, reservation service, generated app template.
-- QA/demo engineer: pytest coverage, Streamlit UI, README, demo script, Git safety checks.
-
-## Safe Submission To Remote Repository
-
-Before pushing, confirm secrets and generated files are not staged:
+### 测试流水线生成的业务系统
 
 ```bash
-git status
-git diff --cached
-git grep "sk-"
+cd output/<batch_id>
+pytest tests/generated -q --cov=src --cov-branch --cov-report=term-missing
 ```
 
-If any suspected API key, token, or secret is found, do not commit it. Remove it from tracked files, rotate the leaked secret in the provider console, then recommit clean files.
+大部分测试无需 API Key，MockLLMAdapter 即可运行。
 
-Suggested submission commands:
+---
 
-```bash
-git status
-git add .
-git commit -m "Initial implementation of AI agent development pipeline"
-git remote add origin <YOUR_REMOTE_URL>
-git push -u origin main
-```
+## 开源依赖
 
-`.env`, `.venv/`, caches, coverage reports, runtime CSV data, generated batch artifacts, and build outputs are ignored by `.gitignore`.
+| 库 | 用途 |
+|----|------|
+| FastAPI | 流水线管控 API |
+| Uvicorn | ASGI 服务器 |
+| Streamlit | 可视化控制台 |
+| Pydantic v2 | 状态模型与数据验证 |
+| OpenAI Python SDK | LLM 调用（可选） |
+| python-dotenv | 环境变量加载 |
+| pytest + pytest-cov | 测试与覆盖率 |
+| requests | Streamlit 调用后端 |
