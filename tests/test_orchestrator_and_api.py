@@ -286,3 +286,120 @@ def test_failed_node_retry_logic(tmp_path: Path) -> None:
     logs = store.read_json(store.log_path(state.batch_id))
     assert any(entry["event"] == "node_failed" for entry in logs)
     assert any(entry["event"] == "node_retry_scheduled" for entry in logs)
+
+
+# ── Manual mode tests ──────────────────────────────────────────────────────────
+
+def test_manual_mode_pauses_after_each_node(tmp_path: Path) -> None:
+    store = FileStore(tmp_path)
+    orchestrator = Orchestrator(store=store, llm=MockLLMAdapter(), max_retries=0)
+    state = orchestrator.create_batch_from_bytes(filename="spec.md", content=b"# Vehicle reservation", mode="manual")
+
+    # run_batch runs only the first queued node then pauses
+    after_design = orchestrator.run_batch(state.batch_id)
+    assert after_design.status == "paused"
+    assert after_design.nodes["design"].status == "succeeded"
+    assert after_design.nodes["code"].status == "queued"
+    assert after_design.nodes["test"].status == "queued"
+    assert after_design.current_node == "code"
+
+    # advance runs code and pauses again
+    after_code = orchestrator.advance_node(state.batch_id)
+    assert after_code.status == "paused"
+    assert after_code.nodes["code"].status == "succeeded"
+    assert after_code.nodes["test"].status == "queued"
+    assert after_code.current_node == "test"
+
+    # advance runs test and completes
+    finished = orchestrator.advance_node(state.batch_id)
+    assert finished.status == "succeeded"
+    assert finished.current_node is None
+    assert all(finished.nodes[n].status == "succeeded" for n in ["design", "code", "test"])
+
+
+def test_manual_mode_advance_rejects_non_paused_batch(tmp_path: Path) -> None:
+    store = FileStore(tmp_path)
+    orchestrator = Orchestrator(store=store, llm=MockLLMAdapter(), max_retries=0)
+    state = orchestrator.create_batch_from_bytes(filename="spec.md", content=b"# Vehicle reservation", mode="manual")
+
+    with pytest.raises(ValueError, match="not paused"):
+        orchestrator.advance_node(state.batch_id)
+
+
+def test_manual_mode_advance_rejects_auto_batch(tmp_path: Path) -> None:
+    store = FileStore(tmp_path)
+    orchestrator = Orchestrator(store=store, llm=MockLLMAdapter(), max_retries=0)
+    state = orchestrator.create_batch_from_bytes(filename="spec.md", content=b"# Vehicle reservation", mode="auto")
+    orchestrator.run_batch(state.batch_id)
+
+    with pytest.raises(ValueError, match="manual mode"):
+        orchestrator.advance_node(state.batch_id)
+
+
+def test_manual_mode_api_endpoints(tmp_path: Path, monkeypatch) -> None:
+    store = FileStore(tmp_path)
+    orch = Orchestrator(store=store, llm=MockLLMAdapter(), max_retries=0)
+    monkeypatch.setattr(api_main, "store", store)
+    monkeypatch.setattr(api_main, "orchestrator", orch)
+    client = TestClient(api_main.app)
+
+    create = client.post(
+        "/api/v1/batches",
+        files={"file": ("spec.md", b"# Vehicle reservation", "text/markdown")},
+        data={"mode": "manual"},
+    )
+    assert create.status_code == 200
+    batch_id = create.json()["batch_id"]
+
+    # start the pipeline
+    run = client.post(f"/api/v1/batches/{batch_id}/run")
+    assert run.status_code == 202
+
+    state = client.get(f"/api/v1/batches/{batch_id}").json()
+    assert state["status"] == "paused"
+    assert state["current_node"] == "code"
+
+    # advance to code
+    adv1 = client.post(f"/api/v1/batches/{batch_id}/advance")
+    assert adv1.status_code == 202
+
+    state = client.get(f"/api/v1/batches/{batch_id}").json()
+    assert state["status"] == "paused"
+    assert state["current_node"] == "test"
+
+    # advance to test
+    adv2 = client.post(f"/api/v1/batches/{batch_id}/advance")
+    assert adv2.status_code == 202
+
+    state = client.get(f"/api/v1/batches/{batch_id}").json()
+    assert state["status"] == "succeeded"
+
+    # advance endpoint rejects non-paused batch
+    err = client.post(f"/api/v1/batches/{batch_id}/advance")
+    assert err.status_code == 400
+
+    # advance endpoint rejects auto-mode batch
+    create_auto = client.post(
+        "/api/v1/batches",
+        files={"file": ("spec2.md", b"# Vehicle reservation", "text/markdown")},
+        data={"mode": "auto"},
+    )
+    auto_id = create_auto.json()["batch_id"]
+    err2 = client.post(f"/api/v1/batches/{auto_id}/advance")
+    assert err2.status_code == 400
+
+
+def test_manual_mode_logs_paused_and_approved_events(tmp_path: Path) -> None:
+    store = FileStore(tmp_path)
+    orchestrator = Orchestrator(store=store, llm=MockLLMAdapter(), max_retries=0)
+    state = orchestrator.create_batch_from_bytes(filename="spec.md", content=b"# Vehicle reservation", mode="manual")
+
+    orchestrator.run_batch(state.batch_id)
+    orchestrator.advance_node(state.batch_id)
+    orchestrator.advance_node(state.batch_id)
+
+    logs = store.read_json(store.log_path(state.batch_id))
+    events = [e["event"] for e in logs]
+    assert events.count("batch_paused") == 2
+    assert events.count("node_approved") == 2
+    assert "batch_succeeded" in events

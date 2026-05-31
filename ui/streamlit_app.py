@@ -17,6 +17,14 @@ REQUEST_TIMEOUT_SECONDS = st.sidebar.number_input(
     step=10,
 )
 
+STATUS_EMOJI = {
+    "queued": "⏳",
+    "running": "⚙️",
+    "succeeded": "✅",
+    "failed": "❌",
+    "paused": "⏸️",
+}
+
 
 def api_request(method: str, path: str, **kwargs):
     timeout = kwargs.pop("timeout", REQUEST_TIMEOUT_SECONDS)
@@ -36,8 +44,12 @@ if "batch_id" not in st.session_state:
 
 with st.form("create_batch"):
     uploaded = st.file_uploader("Upload Markdown product specification", type=["md"])
-    mode = st.selectbox("Running mode", ["auto", "manual"])
-    submitted = st.form_submit_button("Start batch")
+    mode = st.selectbox(
+        "Running mode",
+        ["auto", "manual"],
+        help="auto: all nodes run in sequence without interruption. manual: pipeline pauses after each node for your approval.",
+    )
+    submitted = st.form_submit_button("Create batch")
     if submitted:
         if uploaded is None:
             st.warning("Please upload a Markdown file.")
@@ -49,7 +61,9 @@ with st.form("create_batch"):
                 st.session_state.batch_id = batch_id
                 if mode == "auto":
                     api_request("POST", f"/api/v1/batches/{batch_id}/run")
-                st.success(f"Batch created: {batch_id}")
+                    st.success(f"Batch created and pipeline started automatically: {batch_id}")
+                else:
+                    st.success(f"Batch created in manual mode: {batch_id}. Use the controls below to run each node.")
 
 batch_id = st.text_input("Current batch_id", value=st.session_state.batch_id)
 if batch_id:
@@ -69,7 +83,51 @@ if batch_id:
     state_response = api_request("GET", f"/api/v1/batches/{batch_id}")
     if state_response is not None:
         state = state_response.json()
-        st.subheader("Node status")
+        batch_status = state.get("status", "")
+        batch_mode = state.get("mode", "auto")
+        current_node = state.get("current_node")
+
+        # ── Manual mode control panel ──────────────────────────────────────
+        if batch_mode == "manual":
+            st.divider()
+            st.subheader("Manual Mode Controls")
+
+            node_labels = {"design": "Design", "code": "Code", "test": "Test"}
+            step_cols = st.columns(3)
+            for idx, nid in enumerate(["design", "code", "test"]):
+                node_status = state["nodes"][nid]["status"]
+                emoji = STATUS_EMOJI.get(node_status, "")
+                with step_cols[idx]:
+                    st.metric(label=node_labels[nid], value=f"{emoji} {node_status}")
+
+            if batch_status == "queued":
+                st.info("Pipeline not started yet.")
+                if st.button("▶ Start — run design node"):
+                    api_request("POST", f"/api/v1/batches/{batch_id}/run")
+                    time.sleep(1)
+                    st.rerun()
+
+            elif batch_status == "paused":
+                st.warning(f"⏸️ Pipeline paused. Waiting for your approval to run: **{current_node}**")
+                if st.button(f"▶ Approve & run {current_node}"):
+                    api_request("POST", f"/api/v1/batches/{batch_id}/advance")
+                    time.sleep(1)
+                    st.rerun()
+
+            elif batch_status == "running":
+                st.info(f"⚙️ Running node: **{current_node}** — refresh to check progress.")
+
+            elif batch_status == "succeeded":
+                st.success("✅ All nodes completed successfully.")
+
+            elif batch_status == "failed":
+                st.error(f"❌ Pipeline failed at node: **{current_node}**. Use Retry below.")
+
+            st.divider()
+
+        # ── Node status table ──────────────────────────────────────────────
+        batch_emoji = STATUS_EMOJI.get(batch_status, "")
+        st.subheader(f"Batch status: {batch_emoji} {batch_status}  |  Mode: {batch_mode}")
         rows = []
         for node in state["nodes"].values():
             rows.append(

@@ -57,19 +57,26 @@ class Orchestrator:
         state = self.store.load_state(batch_id)
         state.status = "running"
         self.store.save_state(state)
-        self.logger.log(batch_id=batch_id, event="batch_started", message="Automatic pipeline started")
-        for node_id in NODE_ORDER:
-            state = self._execute_node_with_retries(state, node_id)
-            if state.nodes[node_id].status == "failed":
-                state.status = "failed"
-                state.current_node = node_id
-                self.store.save_state(state)
-                return state
-        state.status = "succeeded"
-        state.current_node = None
+        mode_label = "manual" if state.mode == "manual" else "automatic"
+        self.logger.log(batch_id=batch_id, event="batch_started", message=f"Pipeline started ({mode_label} mode)")
+        return self._execute_pending_nodes(state)
+
+    def advance_node(self, batch_id: str) -> BatchState:
+        """Approve and run the next queued node in a paused manual-mode batch."""
+        state = self.store.load_state(batch_id)
+        if state.mode != "manual":
+            raise ValueError("advance_node is only available for manual mode batches")
+        if state.status != "paused":
+            raise ValueError(f"Batch {batch_id} is not paused (status: {state.status})")
+        state.status = "running"
         self.store.save_state(state)
-        self.logger.log(batch_id=batch_id, event="batch_succeeded", message="Pipeline completed successfully")
-        return state
+        self.logger.log(
+            batch_id=batch_id,
+            node_id=state.current_node,
+            event="node_approved",
+            message=f"User approved execution of {state.current_node}",
+        )
+        return self._execute_pending_nodes(state)
 
     def retry_node(self, batch_id: str, node_id: NodeId) -> BatchState:
         state = self.store.load_state(batch_id)
@@ -90,16 +97,36 @@ class Orchestrator:
         state.current_node = node_id
         self.store.save_state(state)
         self.logger.log(batch_id=batch_id, node_id=node_id, event="node_retry_requested", message=f"Retry requested for {node_id}")
-        for current in NODE_ORDER[start_index:]:
-            state = self._execute_node_with_retries(state, current)
-            if state.nodes[current].status == "failed":
+        return self._execute_pending_nodes(state)
+
+    def _execute_pending_nodes(self, state: BatchState) -> BatchState:
+        """Run all queued nodes in order, pausing after each one in manual mode."""
+        for node_id in NODE_ORDER:
+            if state.nodes[node_id].status != "queued":
+                continue
+            state = self._execute_node_with_retries(state, node_id)
+            if state.nodes[node_id].status == "failed":
                 state.status = "failed"
-                state.current_node = current
+                state.current_node = node_id
                 self.store.save_state(state)
                 return state
+            if state.mode == "manual":
+                remaining = [n for n in NODE_ORDER if state.nodes[n].status == "queued"]
+                if remaining:
+                    state.status = "paused"
+                    state.current_node = remaining[0]
+                    self.store.save_state(state)
+                    self.logger.log(
+                        batch_id=state.batch_id,
+                        node_id=remaining[0],
+                        event="batch_paused",
+                        message=f"Pipeline paused — waiting for approval to run {remaining[0]}",
+                    )
+                    return state
         state.status = "succeeded"
         state.current_node = None
         self.store.save_state(state)
+        self.logger.log(batch_id=state.batch_id, event="batch_succeeded", message="Pipeline completed successfully")
         return state
 
     def _execute_node_with_retries(self, state: BatchState, node_id: NodeId) -> BatchState:

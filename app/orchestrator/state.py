@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 NodeId = Literal["design", "code", "test"]
 NodeStatus = Literal["queued", "running", "succeeded", "failed", "skipped"]
-BatchStatus = Literal["queued", "running", "succeeded", "failed"]
+BatchStatus = Literal["queued", "running", "succeeded", "failed", "paused"]
 
 
 def now_iso() -> str:

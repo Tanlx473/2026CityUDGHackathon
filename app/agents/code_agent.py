@@ -395,6 +395,12 @@ class CodeAgent(BaseAgent):
             "Required files: src/__init__.py and src/api.py. Prefer small modules such as src/models.py and src/services.py.\n"
             "Do not include CSV, JSON, Markdown, config, binary, or data files in files[]; initialize local data from Python code.\n"
             "Do not use external services, network calls, secrets, shell commands, or absolute paths.\n\n"
+            "Populate the manifest field with the following keys:\n"
+            "  system_name: exact system name derived from the specification\n"
+            "  api_routes: list of objects with keys path, method, summary, request_fields (list of {name,type}), response_fields (list of {name,type}), error_cases (list of str)\n"
+            "  data_models: list of objects with keys name, fields (list of {name,type,description})\n"
+            "  business_rules: list of human-readable validation and constraint descriptions\n"
+            "  csv_tables: list of CSV storage table names used by the application\n\n"
             f"# Product specification\n{spec_text}\n\n"
             f"# Design overview\n{overview}\n\n"
             f"# Design manifest\n{manifest}\n"
@@ -439,13 +445,7 @@ class CodeAgent(BaseAgent):
         return target
 
     def _code_manifest(self, result: CodeGenerationResult) -> dict[str, object]:
-        manifest = {
-            "system_name": "Employee Temporary Vehicle Reservation System",
-            "strategy": "llm-structured-generation",
-            "source_root": "src",
-            "modules": sorted(file.path for file in result.files),
-            "entrypoint": "uvicorn src.api:app --reload",
-        }
+        manifest: dict[str, object] = {"strategy": "llm-structured-generation"}
         manifest.update(result.manifest)
         manifest["source_root"] = "src"
         manifest["modules"] = sorted(file.path for file in result.files)

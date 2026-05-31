@@ -72,6 +72,17 @@ def download_artifact(batch_id: str, path: str) -> FileResponse:
     return FileResponse(target, filename=target.name)
 
 
+@app.post("/api/v1/batches/{batch_id}/advance", status_code=202)
+def advance_batch(batch_id: str, background_tasks: BackgroundTasks) -> dict[str, str]:
+    state = _load_state_or_404(batch_id)
+    if state.mode != "manual":
+        raise HTTPException(status_code=400, detail={"message": "advance is only available for manual mode batches"})
+    if state.status != "paused":
+        raise HTTPException(status_code=400, detail={"message": f"Batch is not paused (status: {state.status})"})
+    background_tasks.add_task(orchestrator.advance_node, batch_id)
+    return {"batch_id": batch_id, "node_id": state.current_node, "status": "accepted"}
+
+
 @app.post("/api/v1/batches/{batch_id}/retry/{node_id}", status_code=202)
 def retry_node(batch_id: str, node_id: NodeId, background_tasks: BackgroundTasks) -> dict[str, str]:
     _load_state_or_404(batch_id)
