@@ -297,12 +297,19 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from src.models import ReservationCreate
 from src.services import ReservationService
 
 
 app = FastAPI(title="Employee Temporary Vehicle Reservation System")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 service = ReservationService(Path("data"))
 
 
@@ -338,8 +345,328 @@ def advance_payment(reservation_id: str) -> dict[str, object]:
 }
 
 
+FRONTEND_FILES: dict[str, str] = {
+    "index.html": r'''
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>员工临时车辆预约管理系统</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>员工临时车辆预约管理系统</h1>
+      <p>员工预约、取消、提前缴费与管理员园区配额管理</p>
+    </div>
+    <span id="healthStatus" class="status">待连接</span>
+  </header>
+
+  <main class="layout">
+    <section class="panel">
+      <h2>员工预约</h2>
+      <form id="reservationForm" class="grid-form">
+        <label>姓名<input name="name" required value="Alice"></label>
+        <label>工号<input name="employee_id" required value="E001"></label>
+        <label>手机号<input name="mobile" required value="13800000000"></label>
+        <label>园区<select name="campus" id="campusSelect" required></select></label>
+        <label>预约日期<input name="reservation_date" id="reservationDate" type="date" required></label>
+        <label>车牌号<input name="plate_no" required placeholder="鲁G12345 / 鲁G12345E"></label>
+        <button type="submit">提交预约</button>
+      </form>
+      <p id="reservationMessage" class="message"></p>
+      <div class="hint" id="campusInstruction">请选择园区查看临时车预约说明。</div>
+    </section>
+
+    <section class="panel">
+      <div class="section-heading">
+        <h2>我的预约</h2>
+        <button id="refreshReservations" type="button">刷新</button>
+      </div>
+      <table>
+        <thead>
+          <tr><th>预约号</th><th>园区</th><th>日期</th><th>车牌</th><th>状态</th><th>操作</th></tr>
+        </thead>
+        <tbody id="reservationRows"></tbody>
+      </table>
+    </section>
+
+    <section class="panel">
+      <h2>管理员后台</h2>
+      <p class="hint">查看园区开关、工作日/休息日配额与说明文字。</p>
+      <table>
+        <thead>
+          <tr><th>园区</th><th>工作日配额</th><th>休息日配额</th><th>预约开关</th><th>说明</th></tr>
+        </thead>
+        <tbody id="campusRows"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>
+''',
+    "styles.css": r'''
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #f7f8fa;
+  color: #1f2937;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  align-items: center;
+  padding: 24px 32px;
+  background: #ffffff;
+  border-bottom: 1px solid #d7dde5;
+}
+
+h1, h2, p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 24px;
+}
+
+h2 {
+  font-size: 18px;
+  margin-bottom: 16px;
+}
+
+.status, .message, .hint {
+  font-size: 14px;
+}
+
+.status {
+  padding: 6px 10px;
+  border: 1px solid #b7c4d4;
+  background: #eef3f8;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.layout {
+  display: grid;
+  gap: 20px;
+  padding: 24px 32px;
+}
+
+.panel {
+  background: #ffffff;
+  border: 1px solid #d7dde5;
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.grid-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  gap: 14px;
+  align-items: end;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  font-size: 14px;
+}
+
+input, select, button {
+  min-height: 38px;
+  border: 1px solid #b7c4d4;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font: inherit;
+}
+
+button {
+  background: #14532d;
+  color: #ffffff;
+  border-color: #14532d;
+  cursor: pointer;
+}
+
+.section-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+th, td {
+  padding: 10px;
+  border-bottom: 1px solid #e1e6ed;
+  text-align: left;
+}
+
+.message {
+  min-height: 22px;
+  margin-top: 12px;
+  font-weight: 600;
+}
+
+.hint {
+  margin-top: 10px;
+  color: #526172;
+}
+
+@media (max-width: 820px) {
+  .topbar {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 20px;
+  }
+
+  .layout {
+    padding: 16px;
+  }
+
+  .grid-form {
+    grid-template-columns: 1fr;
+  }
+}
+''',
+    "app.js": r'''
+const apiBase = "http://127.0.0.1:8000";
+
+const healthStatus = document.querySelector("#healthStatus");
+const campusSelect = document.querySelector("#campusSelect");
+const campusRows = document.querySelector("#campusRows");
+const reservationRows = document.querySelector("#reservationRows");
+const reservationForm = document.querySelector("#reservationForm");
+const reservationMessage = document.querySelector("#reservationMessage");
+const campusInstruction = document.querySelector("#campusInstruction");
+const reservationDate = document.querySelector("#reservationDate");
+
+function setMessage(text, ok = true) {
+  reservationMessage.textContent = text;
+  reservationMessage.style.color = ok ? "#14532d" : "#b42318";
+}
+
+async function request(path, options = {}) {
+  const response = await fetch(`${apiBase}${path}`, {
+    headers: {"Content-Type": "application/json"},
+    ...options,
+  });
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+function setDefaultDate() {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  reservationDate.value = tomorrow.toISOString().slice(0, 10);
+}
+
+async function loadHealth() {
+  try {
+    const data = await request("/health");
+    healthStatus.textContent = data.status === "ok" ? "后端已连接" : "连接异常";
+  } catch {
+    healthStatus.textContent = "后端未连接";
+  }
+}
+
+async function loadCampuses() {
+  const campuses = await request("/campuses");
+  campusSelect.innerHTML = "";
+  campusRows.innerHTML = "";
+  for (const campus of campuses) {
+    const option = document.createElement("option");
+    option.value = campus.campus;
+    option.textContent = campus.campus;
+    option.dataset.instruction = campus.instruction || "";
+    campusSelect.appendChild(option);
+
+    const row = document.createElement("tr");
+    row.innerHTML = `<td>${campus.campus}</td><td>${campus.weekday_quota}</td><td>${campus.rest_day_quota}</td><td>${campus.enabled}</td><td>${campus.instruction}</td>`;
+    campusRows.appendChild(row);
+  }
+  updateInstruction();
+}
+
+function updateInstruction() {
+  const selected = campusSelect.selectedOptions[0];
+  campusInstruction.textContent = selected?.dataset.instruction || "请选择园区查看临时车预约说明。";
+}
+
+async function loadReservations() {
+  const reservations = await request("/reservations");
+  reservationRows.innerHTML = "";
+  for (const item of reservations) {
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td>${item.reservation_id}</td>
+      <td>${item.campus}</td>
+      <td>${item.reservation_date}</td>
+      <td>${item.plate_no}</td>
+      <td>${item.status}</td>
+      <td>
+        <button data-action="pay" data-id="${item.reservation_id}" type="button">提前缴费</button>
+        <button data-action="cancel" data-id="${item.reservation_id}" type="button">取消</button>
+      </td>`;
+    reservationRows.appendChild(row);
+  }
+}
+
+reservationForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const payload = Object.fromEntries(new FormData(reservationForm).entries());
+  try {
+    const result = await request("/reservations", {method: "POST", body: JSON.stringify(payload)});
+    setMessage(result.message, result.success);
+    await loadReservations();
+  } catch (error) {
+    setMessage(`提交失败：${error.message}`, false);
+  }
+});
+
+campusSelect.addEventListener("change", updateInstruction);
+
+document.querySelector("#refreshReservations").addEventListener("click", loadReservations);
+
+reservationRows.addEventListener("click", async (event) => {
+  const button = event.target.closest("button");
+  if (!button) return;
+  const id = button.dataset.id;
+  const action = button.dataset.action;
+  const path = action === "pay" ? `/reservations/${id}/pay` : `/reservations/${id}/cancel`;
+  const result = await request(path, {method: "POST"});
+  setMessage(result.message, result.success);
+  await loadReservations();
+});
+
+setDefaultDate();
+loadHealth();
+loadCampuses().then(loadReservations).catch((error) => setMessage(`加载失败：${error.message}`, false));
+''',
+}
+
+
 class GeneratedCodeFile(BaseModel):
-    path: str = Field(pattern=r"^src/.+\.py$", description="Project-relative Python path under src/")
+    path: str = Field(
+        pattern=r"^(src/.+\.py|frontend/.+\.(html|css|js))$",
+        description="Project-relative backend Python path under src/ or static frontend path under frontend/",
+    )
     content: str = Field(min_length=1, description="Complete file contents")
 
 
@@ -361,9 +688,12 @@ class CodeAgent(BaseAgent):
         if src_dir.exists():
             shutil.rmtree(src_dir)
         src_dir.mkdir(parents=True, exist_ok=True)
+        frontend_dir = self.store.root_dir / "frontend"
+        if frontend_dir.exists():
+            shutil.rmtree(frontend_dir)
         written_refs = []
         for generated_file in result.files:
-            target = self._safe_src_path(generated_file.path)
+            target = self._safe_generated_path(generated_file.path)
             written_refs.append(self.store.write_text(target, generated_file.content))
 
         code_manifest = self._code_manifest(result)
@@ -379,21 +709,34 @@ class CodeAgent(BaseAgent):
             for path in sorted(snapshot_dir.rglob("*.py"))
             if path.is_file()
         ]
-        return [manifest_ref, *written_refs, *snapshot_refs]
+        frontend_snapshot_refs = []
+        if frontend_dir.exists():
+            frontend_snapshot_dir = output_dir / "frontend_snapshot"
+            if frontend_snapshot_dir.exists():
+                shutil.rmtree(frontend_snapshot_dir)
+            shutil.copytree(frontend_dir, frontend_snapshot_dir)
+            frontend_snapshot_refs = [
+                self.store.artifact_for(path, kind="frontend_snapshot")
+                for path in sorted(frontend_snapshot_dir.rglob("*"))
+                if path.is_file()
+            ]
+        return [manifest_ref, *written_refs, *snapshot_refs, *frontend_snapshot_refs]
 
     def _generate_code(self, *, batch_id: str, spec_path: str) -> CodeGenerationResult:
         prompt = self.load_prompt()
         spec_text = self.read_text(spec_path)
         overview = self._optional_batch_text(batch_id, "概要设计", "overview_design.md")
         manifest = self._optional_batch_text(batch_id, "概要设计", "design_manifest.json")
-        if self._should_use_template(spec_text=spec_text):
+        if self._should_use_template(spec_text=spec_text) and not self._strict_mode():
             return self._template_generation_result()
         user = (
-            "Generate a complete runnable FastAPI Python application from the product specification.\n"
-            "Return JSON only. Every file path must be project-relative and under src/.\n"
-            "Every files[].content value must be non-empty complete Python source code.\n"
+            "Generate a complete runnable product implementation from the product specification.\n"
+            "Return JSON only. Every backend file path must be project-relative and under src/.\n"
+            "If the specification or design requires Web/B/S/browser/frontend/pages/forms/admin UI, also generate static frontend files under frontend/.\n"
+            "Every files[].content value must be non-empty complete source code or static asset content.\n"
             "Required files: src/__init__.py and src/api.py. Prefer small modules such as src/models.py and src/services.py.\n"
-            "Do not include CSV, JSON, Markdown, config, binary, or data files in files[]; initialize local data from Python code.\n"
+            "If frontend is required, required files include frontend/index.html; frontend/styles.css and frontend/app.js are recommended.\n"
+            "Do not include CSV data, JSON data, Markdown docs, config, binary, or generated runtime data files in files[]; initialize local data from Python code.\n"
             "Do not use external services, network calls, secrets, shell commands, or absolute paths.\n\n"
             "Populate the manifest field with the following keys:\n"
             "  system_name: exact system name derived from the specification\n"
@@ -401,6 +744,8 @@ class CodeAgent(BaseAgent):
             "  data_models: list of objects with keys name, fields (list of {name,type,description})\n"
             "  business_rules: list of human-readable validation and constraint descriptions\n"
             "  csv_tables: list of CSV storage table names used by the application\n\n"
+            "  frontend_pages: list of objects with keys path, name, purpose, controls\n"
+            "  run_instructions: list of exact local commands or URLs for running backend and opening frontend\n\n"
             f"# Product specification\n{spec_text}\n\n"
             f"# Design overview\n{overview}\n\n"
             f"# Design manifest\n{manifest}\n"
@@ -428,20 +773,22 @@ class CodeAgent(BaseAgent):
         vehicle_markers = ["员工临时车辆", "临时车辆预约", "车辆预约管理", "科拓", "园区配置"]
         return any(marker.lower() in haystack for marker in vehicle_markers)
 
-    def _safe_src_path(self, generated_path: str) -> Path:
+    def _safe_generated_path(self, generated_path: str) -> Path:
         candidate = Path(generated_path)
         if candidate.is_absolute():
             raise ValueError(f"Generated path must be relative: {generated_path}")
         if any(part in {"..", "", ".git"} for part in candidate.parts):
             raise ValueError(f"Unsafe generated path: {generated_path}")
-        if not candidate.parts or candidate.parts[0] != "src":
-            raise ValueError(f"Generated path must be under src/: {generated_path}")
+        if not candidate.parts or candidate.parts[0] not in {"src", "frontend"}:
+            raise ValueError(f"Generated path must be under src/ or frontend/: {generated_path}")
         target = (self.store.root_dir / candidate).resolve()
-        src_root = (self.store.root_dir / "src").resolve()
-        if target != src_root and src_root not in target.parents:
-            raise ValueError(f"Generated path escapes src/: {generated_path}")
-        if target.suffix != ".py":
-            raise ValueError(f"Generated code file must be a Python file: {generated_path}")
+        allowed_root = (self.store.root_dir / candidate.parts[0]).resolve()
+        if target != allowed_root and allowed_root not in target.parents:
+            raise ValueError(f"Generated path escapes {candidate.parts[0]}/: {generated_path}")
+        if candidate.parts[0] == "src" and target.suffix != ".py":
+            raise ValueError(f"Generated backend file must be a Python file: {generated_path}")
+        if candidate.parts[0] == "frontend" and target.suffix not in {".html", ".css", ".js"}:
+            raise ValueError(f"Generated frontend file must be .html, .css, or .js: {generated_path}")
         return target
 
     def _code_manifest(self, result: CodeGenerationResult) -> dict[str, object]:
@@ -450,6 +797,14 @@ class CodeAgent(BaseAgent):
         manifest["source_root"] = "src"
         manifest["modules"] = sorted(file.path for file in result.files)
         manifest.setdefault("entrypoint", "uvicorn src.api:app --reload")
+        frontend_modules = sorted(file.path for file in result.files if file.path.startswith("frontend/"))
+        if frontend_modules:
+            manifest.setdefault("frontend_root", "frontend")
+            manifest.setdefault("frontend_files", frontend_modules)
+            manifest.setdefault(
+                "run_instructions",
+                ["uvicorn src.api:app --reload", "open frontend/index.html in a browser"],
+            )
         return manifest
 
     def _template_generation_result(self) -> CodeGenerationResult:
@@ -457,6 +812,10 @@ class CodeAgent(BaseAgent):
             files=[
                 GeneratedCodeFile(path=f"src/{relative_path}", content=dedent(content).lstrip("\n"))
                 for relative_path, content in BUSINESS_FILES.items()
+            ]
+            + [
+                GeneratedCodeFile(path=f"frontend/{relative_path}", content=dedent(content).lstrip("\n"))
+                for relative_path, content in FRONTEND_FILES.items()
             ],
             manifest={
                 "system_name": "Employee Temporary Vehicle Reservation System",
@@ -468,6 +827,25 @@ class CodeAgent(BaseAgent):
                     "ketuo_reservation_archive.csv",
                     "payment_records.csv",
                     "internal_vehicle_archive.csv",
+                ],
+                "frontend_pages": [
+                    {
+                        "path": "frontend/index.html",
+                        "name": "员工临时车辆预约管理页面",
+                        "purpose": "员工提交预约、查看预约、取消预约、提前缴费，管理员查看园区配置与配额",
+                        "controls": [
+                            "reservation form",
+                            "campus selector",
+                            "reservation table",
+                            "cancel button",
+                            "prepay button",
+                            "campus configuration table",
+                        ],
+                    }
+                ],
+                "run_instructions": [
+                    "uvicorn src.api:app --reload",
+                    "open frontend/index.html in a browser",
                 ],
             },
         )

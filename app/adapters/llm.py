@@ -87,5 +87,16 @@ class MockLLMAdapter:
                 "data/internal_vehicle_archive.csv",
             ],
             "validation_rules": ["date_window", "campus_enabled", "daily_quota", "plate_format", "duplicate_plate"],
+            "frontend_requirements": [
+                "Employee reservation form with name, employee ID, mobile, campus, date, and plate fields.",
+                "Reservation list with cancel and advance payment actions.",
+                "Admin view for campus quota and enabled status.",
+            ],
+            "pages": ["Employee reservation page", "My reservations page", "Admin campus configuration page"],
+            "acceptance_criteria": [
+                "A browser-accessible frontend exists when the specification requires Web/B/S access.",
+                "Successful reservation writes local CSV records and Ketuo mock archive data.",
+                "Cancellation releases quota and updates the Ketuo mock archive status.",
+            ],
         }
         return schema.model_validate(payload)

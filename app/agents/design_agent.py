@@ -13,6 +13,9 @@ class DesignManifest(BaseModel):
     api_endpoints: list[str] = Field(default_factory=list)
     csv_tables: list[str] = Field(default_factory=list)
     validation_rules: list[str] = Field(default_factory=list)
+    frontend_requirements: list[str] = Field(default_factory=list)
+    pages: list[str] = Field(default_factory=list)
+    acceptance_criteria: list[str] = Field(default_factory=list)
 
 
 class DesignAgent(BaseAgent):

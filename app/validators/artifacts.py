@@ -54,6 +54,7 @@ class DesignArtifactValidator:
 
 class CodeValidator:
     REQUIRED_FILES = {"__init__.py", "api.py"}
+    FRONTEND_KEYWORDS = ("前端", "Web", "web", "B/S", "BS架构", "浏览器", "页面", "按钮", "后台")
 
     def __init__(self, store: FileStore) -> None:
         self.store = store
@@ -91,6 +92,19 @@ class CodeValidator:
                     sys.path.remove(root)
                 except ValueError:
                     pass
+        frontend_required = self._spec_requires_frontend(batch_id)
+        frontend_files: list[str] = []
+        if frontend_required:
+            frontend_dir = self.store.root_dir / "frontend"
+            index_html = frontend_dir / "index.html"
+            if not index_html.exists() or not index_html.read_text(encoding="utf-8").strip():
+                raise ValidationError("frontend/index.html is required when the specification requires a Web/frontend product")
+            frontend_files = [path.relative_to(self.store.root_dir).as_posix() for path in sorted(frontend_dir.rglob("*")) if path.is_file()]
+            html = index_html.read_text(encoding="utf-8")
+            required_markers = ("form", "button", "reservation")
+            missing_markers = [marker for marker in required_markers if marker not in html]
+            if missing_markers:
+                raise ValidationError(f"frontend/index.html missing required UI markers: {missing_markers}")
         return {
             "validator": "code",
             "passed": True,
@@ -100,9 +114,20 @@ class CodeValidator:
                 "required_files_present": True,
                 "py_compile_passed": True,
                 "fastapi_app_importable": True,
+                "frontend_required": frontend_required,
+                "frontend_present": bool(frontend_files) if frontend_required else None,
             },
             "files": [path.name for path in python_files],
+            "frontend_files": frontend_files,
         }
+
+    def _spec_requires_frontend(self, batch_id: str) -> bool:
+        try:
+            state = self.store.load_state(batch_id)
+            spec_text = self.store.resolve(state.spec_path).read_text(encoding="utf-8")
+        except Exception:
+            return False
+        return any(keyword in spec_text for keyword in self.FRONTEND_KEYWORDS)
 
 
 class TestValidator:
