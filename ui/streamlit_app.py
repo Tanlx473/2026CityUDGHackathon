@@ -158,7 +158,7 @@ if batch_id:
     artifacts_response = api_request("GET", f"/api/v1/batches/{batch_id}/artifacts")
     if artifacts_response is not None:
         artifacts = artifacts_response.json()
-        if state_resp.json().get("status") == "succeeded":
+        if state_response is not None and state_response.json().get("status") == "succeeded":
             pkg = api_request("GET", f"/api/v1/batches/{batch_id}/package")
             if pkg is not None:
                 st.download_button(
