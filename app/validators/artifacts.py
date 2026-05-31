@@ -60,7 +60,8 @@ class CodeValidator:
         self.store = store
 
     def validate(self, batch_id: str) -> dict[str, Any]:
-        src_dir = self.store.root_dir / "src"
+        out_root = self.store.output_batch_dir(batch_id)
+        src_dir = out_root / "src"
         if not src_dir.exists():
             raise ValidationError("src/ does not exist")
         python_files = sorted(src_dir.rglob("*.py"))
@@ -70,7 +71,7 @@ class CodeValidator:
             raise ValidationError(f"src/ missing required files: {sorted(missing)}")
         for path in python_files:
             py_compile.compile(str(path), doraise=True)
-        root = str(self.store.root_dir)
+        root = str(out_root)
         inserted = False
         if root not in sys.path:
             sys.path.insert(0, root)
@@ -95,11 +96,11 @@ class CodeValidator:
         frontend_required = self._spec_requires_frontend(batch_id)
         frontend_files: list[str] = []
         if frontend_required:
-            frontend_dir = self.store.root_dir / "frontend"
+            frontend_dir = out_root / "frontend"
             index_html = frontend_dir / "index.html"
             if not index_html.exists() or not index_html.read_text(encoding="utf-8").strip():
                 raise ValidationError("frontend/index.html is required when the specification requires a Web/frontend product")
-            frontend_files = [path.relative_to(self.store.root_dir).as_posix() for path in sorted(frontend_dir.rglob("*")) if path.is_file()]
+            frontend_files = [path.relative_to(out_root).as_posix() for path in sorted(frontend_dir.rglob("*")) if path.is_file()]
             html = index_html.read_text(encoding="utf-8")
             required_markers = ("form", "button")
             missing_markers = [marker for marker in required_markers if marker not in html]
@@ -135,7 +136,8 @@ class TestValidator:
         self.store = store
 
     def validate(self, batch_id: str) -> dict[str, Any]:
-        generated_dir = self.store.root_dir / "tests" / "generated"
+        out_root = self.store.output_batch_dir(batch_id)
+        generated_dir = out_root / "tests" / "generated"
         if not generated_dir.exists():
             raise ValidationError("tests/generated/ does not exist")
         targets = sorted(path for path in generated_dir.rglob("test_*.py") if path.is_file())
@@ -152,7 +154,7 @@ class TestValidator:
             "--cov-fail-under=80",
             "--cov-report=term-missing",
         ]
-        completed = subprocess.run(command, cwd=self.store.root_dir, text=True, capture_output=True, timeout=60)
+        completed = subprocess.run(command, cwd=out_root, text=True, capture_output=True, timeout=60)
         if completed.returncode != 0:
             raise ValidationError((completed.stdout + "\n" + completed.stderr).strip())
         return {
