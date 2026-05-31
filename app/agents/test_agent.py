@@ -188,22 +188,23 @@ class TestAgent(BaseAgent):
             return self._template_generation_result()
         source_index = self._source_index()
         user = (
-            "Generate deterministic pytest tests for the generated FastAPI application.\n"
-            "Return JSON only. Every test file path must be under tests/generated/.\n"
-            "Generate a complete replacement test suite for the current generated src/ tree; do not assume any previous tests exist.\n"
-            "Tests must use only local temporary files and FastAPI TestClient where useful.\n"
-            "Do not call external APIs, shell commands, or network services.\n\n"
-            "Use the code_manifest as your primary guide:\n"
-            "  - api_routes: generate at least one test per route (happy path + each error_case)\n"
-            "  - business_rules: generate one test per rule (pass case and fail case)\n"
-            "  - data_models: use listed field names/types to build valid and invalid payloads\n"
-            "  - csv_tables: verify successful operations write expected rows to correct tables\n"
-            "Group tests into separate files: test_api_routes.py, test_business_rules.py, test_storage.py.\n\n"
-            f"# Product specification\n{spec_text}\n\n"
-            f"# Design overview\n{overview}\n\n"
-            f"# Design manifest\n{design_manifest}\n\n"
-            f"# Code manifest\n{code_manifest}\n\n"
-            f"# Generated source file index\n{source_index}\n"
+            "生成完整的、确定性的 pytest 测试套件，覆盖下方 code_manifest 中记录的至少 80% 的 API 路由和业务规则。\n"
+            "返回 JSON，不含 Markdown、不含 prose。每个测试文件路径必须在 tests/generated/ 下。\n"
+            "这是完整的替换测试套件，从零生成，不假设任何之前的测试存在。\n"
+            "所有测试函数必须：仅使用 tmp_path 和 FastAPI TestClient；无共享可变状态；可独立运行；可重复执行。\n"
+            "严禁调用外部 API、shell 命令、网络服务。\n"
+            "严禁依赖源代码文本——所有导入路径、类名、字段名、错误消息文本均从 code_manifest 和 design_manifest 中读取。\n\n"
+            "必须生成以下四个文件：\n"
+            "  tests/generated/test_api_routes.py — 每条路由 × 正常路径 + 每个 error_case\n"
+            "  tests/generated/test_business_rules.py — 每条业务规则 × 满足条件 + 违反条件\n"
+            "  tests/generated/test_storage.py — 成功写操作后验证 CSV 行内容正确\n"
+            "  tests/generated/test_frontend_contract.py — 前端文件存在性 + HTML 控件内容检查（不启动浏览器）\n\n"
+            "错误消息文本的预期值从 design_manifest 的 business_rules 或 overview_design 的【出错处理】章节获取。\n\n"
+            f"# 产品规格说明书\n{spec_text}\n\n"
+            f"# 概要设计文档（overview_design.md）\n{overview}\n\n"
+            f"# 设计清单（design_manifest.json）\n{design_manifest}\n\n"
+            f"# 代码接口清单（code_manifest.json）\n{code_manifest}\n\n"
+            f"# 生成的源文件路径索引\n{source_index}\n"
         )
         metadata = {"batch_id": batch_id, "node_id": "test"}
         try:
@@ -230,9 +231,7 @@ class TestAgent(BaseAgent):
             data = json.loads(manifest_text)
         except json.JSONDecodeError:
             return False
-        strategy = str(data.get("strategy", ""))
-        modules = {str(item) for item in data.get("modules", [])}
-        return strategy == "template-fallback" or "src/csv_repository.py" in modules
+        return str(data.get("strategy", "")) == "template-fallback"
 
     def _source_index(self) -> str:
         src_dir = self.store.root_dir / "src"

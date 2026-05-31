@@ -727,28 +727,40 @@ class CodeAgent(BaseAgent):
         spec_text = self.read_text(spec_path)
         overview = self._optional_batch_text(batch_id, "概要设计", "overview_design.md")
         manifest = self._optional_batch_text(batch_id, "概要设计", "design_manifest.json")
-        if self._should_use_template(spec_text=spec_text) and not self._strict_mode():
-            return self._template_generation_result()
+        frontend_required = bool(manifest) and any(
+            kw in (overview + manifest)
+            for kw in ("frontend_requirements", "pages", "Web", "B/S", "浏览器", "前端", "页面", "表单", "按钮", "后台")
+        )
+        frontend_instruction = (
+            "IMPORTANT: The design mandates a frontend. You MUST generate frontend/index.html "
+            "(and frontend/styles.css, frontend/app.js). The HTML must be a complete, usable UI — "
+            "not a placeholder — implementing every workflow described in the design overview.\n"
+            if frontend_required
+            else "Generate a frontend only if the design overview or design manifest explicitly documents frontend pages.\n"
+        )
         user = (
-            "Generate a complete runnable product implementation from the product specification.\n"
-            "Return JSON only. Every backend file path must be project-relative and under src/.\n"
-            "If the specification or design requires Web/B/S/browser/frontend/pages/forms/admin UI, also generate static frontend files under frontend/.\n"
-            "Every files[].content value must be non-empty complete source code or static asset content.\n"
-            "Required files: src/__init__.py and src/api.py. Prefer small modules such as src/models.py and src/services.py.\n"
-            "If frontend is required, required files include frontend/index.html; frontend/styles.css and frontend/app.js are recommended.\n"
-            "Do not include CSV data, JSON data, Markdown docs, config, binary, or generated runtime data files in files[]; initialize local data from Python code.\n"
-            "Do not use external services, network calls, secrets, shell commands, or absolute paths.\n\n"
-            "Populate the manifest field with the following keys:\n"
-            "  system_name: exact system name derived from the specification\n"
-            "  api_routes: list of objects with keys path, method, summary, request_fields (list of {name,type}), response_fields (list of {name,type}), error_cases (list of str)\n"
-            "  data_models: list of objects with keys name, fields (list of {name,type,description})\n"
-            "  business_rules: list of human-readable validation and constraint descriptions\n"
-            "  csv_tables: list of CSV storage table names used by the application\n\n"
-            "  frontend_pages: list of objects with keys path, name, purpose, controls\n"
-            "  run_instructions: list of exact local commands or URLs for running backend and opening frontend\n\n"
-            f"# Product specification\n{spec_text}\n\n"
-            f"# Design overview\n{overview}\n\n"
-            f"# Design manifest\n{manifest}\n"
+            "根据下方的概要设计文档和设计清单，生成完整、可运行的应用系统代码。\n"
+            "概要设计文档是你的主要权威输入，产品规格说明书作为补充背景参考。\n"
+            "返回 JSON，不含 Markdown、不含 prose。\n"
+            "每个后端文件路径必须在 src/ 下；若需要前端，文件路径在 frontend/ 下。\n"
+            f"{frontend_instruction}"
+            "每个 files[].content 必须是完整的可运行源代码或静态资源，不得为空或片段。\n"
+            "必须包含的后端文件：src/__init__.py、src/api.py。推荐拆分：src/models.py、src/services.py、src/storage.py 或 src/repository.py。\n"
+            "若生成前端，frontend/index.html 为必须；frontend/styles.css 和 frontend/app.js 强烈推荐。\n"
+            "files[] 中禁止包含：CSV 数据文件、JSON 数据文件、Markdown 文档、配置文件、二进制文件。种子数据用 Python 代码在启动时初始化。\n"
+            "禁止调用外部 API、shell 命令、网络服务，禁止从环境变量读取业务参数。\n"
+            "代码遵循 PEP 8 命名规范，包含必要的错误处理，结构清晰，每个文件职责单一。\n\n"
+            "manifest 字段必须填写以下所有 key（TestAgent 将以此作为结构化接口）：\n"
+            "  system_name: 与规格书一致的系统名称\n"
+            "  api_routes: [{path, method, summary, request_fields:[{name,type}], response_fields:[{name,type}], error_cases:[str]}]\n"
+            "  data_models: [{name, fields:[{name,type,description}]}]\n"
+            "  business_rules: 完整的业务规则描述列表（每条为完整中文句子）\n"
+            "  csv_tables: 所有 CSV 存储文件名列表\n"
+            "  frontend_pages: [{path, name, purpose, controls:[str]}]，每个页面一条\n"
+            "  run_instructions: 本地启动所需的完整命令和 URL 列表\n\n"
+            f"# 产品规格说明书（背景参考）\n{spec_text}\n\n"
+            f"# 概要设计文档（主要权威输入）\n{overview}\n\n"
+            f"# 设计清单 design_manifest.json\n{manifest}\n"
         )
         metadata = {"batch_id": batch_id, "node_id": "code"}
         try:
@@ -767,11 +779,6 @@ class CodeAgent(BaseAgent):
         if not path.exists():
             return ""
         return path.read_text(encoding="utf-8")
-
-    def _should_use_template(self, *, spec_text: str) -> bool:
-        haystack = spec_text.lower()
-        vehicle_markers = ["员工临时车辆", "临时车辆预约", "车辆预约管理", "科拓", "园区配置"]
-        return any(marker.lower() in haystack for marker in vehicle_markers)
 
     def _safe_generated_path(self, generated_path: str) -> Path:
         candidate = Path(generated_path)

@@ -101,7 +101,7 @@ class CodeValidator:
                 raise ValidationError("frontend/index.html is required when the specification requires a Web/frontend product")
             frontend_files = [path.relative_to(self.store.root_dir).as_posix() for path in sorted(frontend_dir.rglob("*")) if path.is_file()]
             html = index_html.read_text(encoding="utf-8")
-            required_markers = ("form", "button", "reservation")
+            required_markers = ("form", "button")
             missing_markers = [marker for marker in required_markers if marker not in html]
             if missing_markers:
                 raise ValidationError(f"frontend/index.html missing required UI markers: {missing_markers}")
