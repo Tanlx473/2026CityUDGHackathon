@@ -194,18 +194,21 @@ class TestAgent(BaseAgent):
             "这是完整的替换测试套件，从零生成，不假设任何之前的测试存在。\n"
             "所有测试函数必须：仅使用 tmp_path 和 FastAPI TestClient；无共享可变状态；可独立运行；可重复执行。\n"
             "严禁调用外部 API、shell 命令、网络服务。\n"
-            "严禁依赖源代码文本——所有导入路径、类名、字段名、错误消息文本均从 code_manifest 和 design_manifest 中读取。\n\n"
+            "【重要】所有 import 路径、模块名、类名、函数名、字段名、错误消息必须与下方【实际生成的源代码】完全一致。\n"
+            "源代码中不存在的模块、类、端点、字段禁止出现在任何 import 或测试断言中。\n"
+            "若源代码中没有鉴权/角色权限逻辑，禁止生成任何权限相关测试（如 permission_error、not_logged_in 等）。\n"
+            "conftest.py（如生成）中只允许导入源代码中已确认存在的模块；不确定是否存在时不导入。\n\n"
             "必须生成以下四个文件：\n"
-            "  tests/generated/test_api_routes.py — 每条路由 × 正常路径 + 每个 error_case\n"
-            "  tests/generated/test_business_rules.py — 每条业务规则 × 满足条件 + 违反条件\n"
-            "  tests/generated/test_storage.py — 成功写操作后验证 CSV 行内容正确\n"
+            "  tests/generated/test_api_routes.py — 仅测试 code_manifest 的 api_routes 中列出的路由，每条 × 正常路径 + error_cases\n"
+            "  tests/generated/test_business_rules.py — 仅测试源代码中已实现的业务规则 × 满足条件 + 违反条件\n"
+            "  tests/generated/test_storage.py — 成功写操作后验证 CSV 行内容正确（字段名取自源代码的 DEFAULT_SCHEMAS 或等效定义）\n"
             "  tests/generated/test_frontend_contract.py — 前端文件存在性 + HTML 控件内容检查（不启动浏览器）\n\n"
-            "错误消息文本的预期值从 design_manifest 的 business_rules 或 overview_design 的【出错处理】章节获取。\n\n"
+            "错误消息的预期值必须与源代码中的字符串字面量一致，不得从 design_manifest 或 overview_design 中臆测。\n\n"
             f"# 产品规格说明书\n{spec_text}\n\n"
             f"# 概要设计文档（overview_design.md）\n{overview}\n\n"
             f"# 设计清单（design_manifest.json）\n{design_manifest}\n\n"
             f"# 代码接口清单（code_manifest.json）\n{code_manifest}\n\n"
-            f"# 生成的源文件路径索引\n{source_index}\n"
+            f"# 实际生成的源代码（测试的唯一权威依据，import 和断言必须与此完全一致）\n{source_index}\n"
         )
         metadata = {"batch_id": batch_id, "node_id": "test"}
         try:
@@ -238,11 +241,22 @@ class TestAgent(BaseAgent):
         src_dir = self.store.output_batch_dir(batch_id) / "src"
         if not src_dir.exists():
             src_dir = self.store.root_dir / "src"
-        entries = []
+        CONTENT_FILES = {"api.py", "models.py", "services.py", "repository.py", "storage.py", "csv_repository.py"}
+        MAX_CHARS_PER_FILE = 5000
+        parts = []
         for path in sorted(src_dir.rglob("*.py")):
             relative = "src/" + path.relative_to(src_dir).as_posix()
-            entries.append(relative)
-        return "\n".join(f"- {entry}" for entry in entries)
+            if path.name in CONTENT_FILES:
+                try:
+                    content = path.read_text(encoding="utf-8")
+                    if len(content) > MAX_CHARS_PER_FILE:
+                        content = content[:MAX_CHARS_PER_FILE] + "\n# ... (truncated)"
+                    parts.append(f"### {relative}\n```python\n{content}\n```")
+                except Exception:
+                    parts.append(f"- {relative}")
+            else:
+                parts.append(f"- {relative}")
+        return "\n\n".join(parts)
 
     def _safe_test_path(self, generated_path: str, base_dir: Path | None = None) -> Path:
         candidate = Path(generated_path)
