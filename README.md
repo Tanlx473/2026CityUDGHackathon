@@ -148,7 +148,7 @@ For no-key demo mode, leave `OPENAI_API_KEY` empty.
 ## Run Backend
 
 ```bash
-uvicorn app.api.main:app --reload
+uvicorn app.api.main:app --reload --reload-dir app
 ```
 
 Health check:
@@ -203,7 +203,7 @@ The pipeline validator enforces `--cov-fail-under=80` for generated tests. Each 
 
 ## Demonstration Workflow
 
-1. Start backend: `uvicorn app.api.main:app --reload`
+1. Start backend: `uvicorn app.api.main:app --reload --reload-dir app`
 2. Start UI: `streamlit run ui/streamlit_app.py`
 3. Upload the Markdown product specification for the employee temporary vehicle reservation system.
 4. Select `auto`.
