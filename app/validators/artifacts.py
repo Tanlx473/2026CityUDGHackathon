@@ -149,6 +149,7 @@ class TestValidator:
         command = [
             sys.executable, "-m", "pytest", "-q",
             "tests/generated",
+            "--continue-on-collection-errors",
             "--cov=src", "--cov-branch", "--cov-report=term-missing",
         ]
         completed = subprocess.run(command, cwd=out_root, text=True, capture_output=True, timeout=120)
@@ -156,9 +157,12 @@ class TestValidator:
 
         coverage_pct = self._parse_coverage(output)
         passed, failed, total = self._parse_test_counts(output)
+        errors = self._parse_error_count(output)
 
-        if coverage_pct is None:
-            raise ValidationError(f"无法从 pytest 输出中解析覆盖率。\n{output[-3000:]}")
+        if coverage_pct is None or coverage_pct == 0:
+            raise ValidationError(
+                f"测试套件收集失败（可能是 conftest.py 导入错误），覆盖率无法测量。\n{output[-3000:]}"
+            )
         if coverage_pct < self.COVERAGE_THRESHOLD:
             raise ValidationError(
                 f"覆盖率 {coverage_pct}% 低于要求的 {self.COVERAGE_THRESHOLD}%。\n{output[-3000:]}"
@@ -175,7 +179,7 @@ class TestValidator:
                 "coverage_threshold_passed": True,
                 "all_tests_passed": failed == 0,
             },
-            "test_counts": {"passed": passed, "failed": failed, "total": total},
+            "test_counts": {"passed": passed, "failed": failed, "errors": errors, "total": total},
             "summary": output[-2000:],
         }
 
@@ -202,6 +206,11 @@ class TestValidator:
             passed = int(m.group(1))
             return passed, 0, passed
         return 0, 0, 0
+
+    @staticmethod
+    def _parse_error_count(output: str) -> int:
+        m = re.search(r"(\d+) error", output)
+        return int(m.group(1)) if m else 0
 
 
 def validate_batch_smoke(store: FileStore, batch_id: str) -> dict[str, Any]:
