@@ -283,6 +283,7 @@ class ReservationService:
                 if normalize_plate(record.plate_no) == normalize_plate(reservation.plate_no) and record.park_name == reservation.park_name and record.reservation_date == reservation.reservation_date and record.status == "pending_effective":
                     record.status = "cancelled"
                     record.synced_at = now()
+                    db.ketuo_reserved_vehicles[record.id] = record
             LoggingService.log("employee", employee_id, "cancel_reservation", reservation_id, reservation.plate_no)
             return CancelResponse(message="预约已取消，车位已释放", reservation=ReservationService._to_response(reservation))
 

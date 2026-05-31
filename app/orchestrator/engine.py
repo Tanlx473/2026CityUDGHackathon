@@ -82,6 +82,7 @@ class Orchestrator:
             node.started_at = None
             node.finished_at = None
             node.error_message = None
+            node.quality_check_result = {}
             if downstream != node_id:
                 node.retries = 0
                 node.outputs = []
@@ -127,6 +128,7 @@ class Orchestrator:
         node.started_at = now_iso()
         node.finished_at = None
         node.error_message = None
+        node.quality_check_result = {}
         node.inputs = self._inputs_for(state, node_id)
         state.status = "running"
         state.current_node = node_id
@@ -142,7 +144,7 @@ class Orchestrator:
         try:
             outputs = self._agent_for(node_id).run({"batch_id": state.batch_id, "spec_path": state.spec_path})
             node.outputs = [output for output in outputs if isinstance(output, ArtifactRef)]
-            self._validator_for(node_id).validate(state.batch_id)
+            node.quality_check_result = self._validator_for(node_id).validate(state.batch_id)
             node.status = "succeeded"
             node.finished_at = now_iso()
             duration_ms = int((time.perf_counter() - started) * 1000)

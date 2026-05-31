@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.orchestrator.state import ArtifactRef, BatchState, NodeState
 from app.storage.file_store import FileStore
+from src.storage import InMemoryDB
 
 
 def test_batch_state_serialization_round_trip() -> None:
@@ -24,3 +25,20 @@ def test_file_store_write_and_read(tmp_path) -> None:
     assert ref.path == "docs/已生成/b1/artifact.json"
     assert store.read_json(path) == {"hello": "world"}
     assert len(ref.sha256) == 64
+
+
+def test_business_storage_persists_seed_and_updates_to_csv(tmp_path) -> None:
+    db = InMemoryDB(tmp_path)
+
+    assert (tmp_path / "employees.csv").exists()
+    assert (tmp_path / "parks.csv").exists()
+
+    park = db.parks["park_weifang"]
+    park.reservation_enabled = False
+    park.description = "CSV persisted description"
+    db.parks[park.park_id] = park
+
+    restored = InMemoryDB(tmp_path)
+
+    assert restored.parks["park_weifang"].reservation_enabled is False
+    assert restored.parks["park_weifang"].description == "CSV persisted description"

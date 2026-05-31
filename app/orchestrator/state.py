@@ -29,6 +29,7 @@ class NodeState(BaseModel):
     finished_at: str | None = None
     inputs: list[ArtifactRef] = Field(default_factory=list)
     outputs: list[ArtifactRef] = Field(default_factory=list)
+    quality_check_result: dict[str, Any] = Field(default_factory=dict)
     error_message: str | None = None
 
 

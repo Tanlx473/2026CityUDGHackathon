@@ -40,7 +40,16 @@ class DesignArtifactValidator:
         missing = self.REQUIRED_FIELDS - set(data)
         if missing:
             raise ValidationError(f"design_manifest.json missing fields: {sorted(missing)}")
-        return {"validator": "design", "ok": True}
+        return {
+            "validator": "design",
+            "passed": True,
+            "score": 100,
+            "checks": {
+                "overview_design_non_empty": True,
+                "manifest_exists": True,
+                "required_fields_present": True,
+            },
+        }
 
 
 class CodeValidator:
@@ -82,7 +91,18 @@ class CodeValidator:
                     sys.path.remove(root)
                 except ValueError:
                     pass
-        return {"validator": "code", "ok": True, "files": [path.name for path in python_files]}
+        return {
+            "validator": "code",
+            "passed": True,
+            "score": 100,
+            "checks": {
+                "src_exists": True,
+                "required_files_present": True,
+                "py_compile_passed": True,
+                "fastapi_app_importable": True,
+            },
+            "files": [path.name for path in python_files],
+        }
 
 
 class TestValidator:
@@ -104,12 +124,24 @@ class TestValidator:
             "tests/generated",
             "--cov=src",
             "--cov-branch",
+            "--cov-fail-under=80",
             "--cov-report=term-missing",
         ]
         completed = subprocess.run(command, cwd=self.store.root_dir, text=True, capture_output=True, timeout=60)
         if completed.returncode != 0:
             raise ValidationError((completed.stdout + "\n" + completed.stderr).strip())
-        return {"validator": "test", "ok": True, "summary": completed.stdout[-2000:]}
+        return {
+            "validator": "test",
+            "passed": True,
+            "score": 100,
+            "coverage_threshold": 80,
+            "checks": {
+                "generated_tests_exist": True,
+                "pytest_passed": True,
+                "coverage_threshold_passed": True,
+            },
+            "summary": completed.stdout[-2000:],
+        }
 
 
 def validate_batch_smoke(store: FileStore, batch_id: str) -> dict[str, Any]:

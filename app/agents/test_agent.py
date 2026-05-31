@@ -14,6 +14,9 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+from fastapi.testclient import TestClient
+
+from src import api as business_api
 from src.csv_repository import CSVRepository
 from src.models import ReservationCreate
 from src.services import DISABLED_MESSAGE, PAYMENT_SUCCESS_MESSAGE, ReservationService
@@ -28,6 +31,40 @@ def make_request(day: date, campus: str = "Weifang", plate_no: str = "鲁A12345"
         reservation_date=day,
         plate_no=plate_no,
     )
+
+
+def api_payload(day: date, campus: str = "Weifang", plate_no: str = "鲁A12345") -> dict[str, str]:
+    return {
+        "name": "Alice",
+        "employee_id": "E001",
+        "mobile": "13800000000",
+        "campus": campus,
+        "reservation_date": day.isoformat(),
+        "plate_no": plate_no,
+    }
+
+
+def test_fastapi_endpoints_use_local_csv_service(tmp_path, monkeypatch):
+    monkeypatch.setattr(business_api, "service", ReservationService(tmp_path))
+    client = TestClient(business_api.app)
+    day = date.today() + timedelta(days=1)
+
+    assert client.get("/health").json()["status"] == "ok"
+    assert len(client.get("/campuses").json()) == 4
+
+    created = client.post("/reservations", json=api_payload(day, plate_no="鲁A54321"))
+    assert created.status_code == 200
+    body = created.json()
+    assert body["success"] is True
+    reservation_id = body["reservation_id"]
+
+    assert len(client.get("/reservations").json()) == 1
+    paid = client.post(f"/reservations/{reservation_id}/pay")
+    assert paid.status_code == 200
+    assert paid.json()["message"] == PAYMENT_SUCCESS_MESSAGE
+    cancelled = client.post(f"/reservations/{reservation_id}/cancel")
+    assert cancelled.status_code == 200
+    assert cancelled.json()["success"] is True
 
 
 def test_csv_repository_initialization_append_and_update(tmp_path):
@@ -146,7 +183,7 @@ class TestAgent(BaseAgent):
         overview = self._optional_batch_text(batch_id, "概要设计", "overview_design.md")
         design_manifest = self._optional_batch_text(batch_id, "概要设计", "design_manifest.json")
         code_manifest = self._optional_batch_text(batch_id, "代码生成", "code_manifest.json")
-        source_files = self._source_context()
+        source_index = self._source_index()
         user = (
             "Generate deterministic pytest tests for the generated FastAPI application.\n"
             "Return JSON only. Every test file path must be under tests/generated/.\n"
@@ -157,7 +194,7 @@ class TestAgent(BaseAgent):
             f"# Design overview\n{overview}\n\n"
             f"# Design manifest\n{design_manifest}\n\n"
             f"# Code manifest\n{code_manifest}\n\n"
-            f"# Generated source files\n{source_files}\n"
+            f"# Generated source file index\n{source_index}\n"
         )
         metadata = {"batch_id": batch_id, "node_id": "test"}
         try:
@@ -177,13 +214,13 @@ class TestAgent(BaseAgent):
             return ""
         return path.read_text(encoding="utf-8")
 
-    def _source_context(self) -> str:
+    def _source_index(self) -> str:
         src_dir = self.store.root_dir / "src"
-        chunks = []
+        entries = []
         for path in sorted(src_dir.rglob("*.py")):
             relative = path.relative_to(self.store.root_dir).as_posix()
-            chunks.append(f"## {relative}\n{path.read_text(encoding='utf-8')}")
-        return "\n\n".join(chunks)
+            entries.append(relative)
+        return "\n".join(f"- {entry}" for entry in entries)
 
     def _safe_test_path(self, generated_path: str) -> Path:
         candidate = Path(generated_path)
