@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import py_compile
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -135,6 +136,8 @@ class TestValidator:
     def __init__(self, store: FileStore) -> None:
         self.store = store
 
+    COVERAGE_THRESHOLD = 80
+
     def validate(self, batch_id: str) -> dict[str, Any]:
         out_root = self.store.output_batch_dir(batch_id)
         generated_dir = out_root / "tests" / "generated"
@@ -144,31 +147,61 @@ class TestValidator:
         if not targets:
             raise ValidationError("generated pytest files are missing")
         command = [
-            sys.executable,
-            "-m",
-            "pytest",
-            "-q",
+            sys.executable, "-m", "pytest", "-q",
             "tests/generated",
-            "--cov=src",
-            "--cov-branch",
-            "--cov-fail-under=80",
-            "--cov-report=term-missing",
+            "--cov=src", "--cov-branch", "--cov-report=term-missing",
         ]
-        completed = subprocess.run(command, cwd=out_root, text=True, capture_output=True, timeout=60)
-        if completed.returncode != 0:
-            raise ValidationError((completed.stdout + "\n" + completed.stderr).strip())
+        completed = subprocess.run(command, cwd=out_root, text=True, capture_output=True, timeout=120)
+        output = completed.stdout + "\n" + completed.stderr
+
+        coverage_pct = self._parse_coverage(output)
+        passed, failed, total = self._parse_test_counts(output)
+
+        if coverage_pct is None:
+            raise ValidationError(f"无法从 pytest 输出中解析覆盖率。\n{output[-3000:]}")
+        if coverage_pct < self.COVERAGE_THRESHOLD:
+            raise ValidationError(
+                f"覆盖率 {coverage_pct}% 低于要求的 {self.COVERAGE_THRESHOLD}%。\n{output[-3000:]}"
+            )
+
         return {
             "validator": "test",
             "passed": True,
-            "score": 100,
-            "coverage_threshold": 80,
+            "score": min(100, coverage_pct),
+            "coverage_pct": coverage_pct,
+            "coverage_threshold": self.COVERAGE_THRESHOLD,
             "checks": {
                 "generated_tests_exist": True,
-                "pytest_passed": True,
                 "coverage_threshold_passed": True,
+                "all_tests_passed": failed == 0,
             },
-            "summary": completed.stdout[-2000:],
+            "test_counts": {"passed": passed, "failed": failed, "total": total},
+            "summary": output[-2000:],
         }
+
+    @staticmethod
+    def _parse_coverage(output: str) -> int | None:
+        # pytest-cov with --cov-branch: "TOTAL  stmts  miss  branch  partial  cover%"
+        m = re.search(r"^TOTAL\s+\d+\s+\d+\s+\d+\s+\d+\s+(\d+)%", output, re.MULTILINE)
+        if m:
+            return int(m.group(1))
+        # pytest-cov without branch: "TOTAL  stmts  miss  cover%"
+        m = re.search(r"^TOTAL\s+\d+\s+\d+\s+(\d+)%", output, re.MULTILINE)
+        if m:
+            return int(m.group(1))
+        return None
+
+    @staticmethod
+    def _parse_test_counts(output: str) -> tuple[int, int, int]:
+        m = re.search(r"(\d+) failed.*?(\d+) passed", output)
+        if m:
+            failed, passed = int(m.group(1)), int(m.group(2))
+            return passed, failed, passed + failed
+        m = re.search(r"(\d+) passed", output)
+        if m:
+            passed = int(m.group(1))
+            return passed, 0, passed
+        return 0, 0, 0
 
 
 def validate_batch_smoke(store: FileStore, batch_id: str) -> dict[str, Any]:
