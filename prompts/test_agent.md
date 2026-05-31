@@ -24,8 +24,9 @@
 
 - **覆盖率 ≥ 80%**：测试必须覆盖 `code_manifest.json` 中记录的至少 80% 的 API 路由和业务规则。这是赛题的强制评分指标，不得妥协。
 - **断言清晰**：每个 `assert` 语句必须测试一个具体的、有意义的条件；禁止使用 `assert True` 或无断言的测试函数。
-- **可重复执行**：所有测试函数必须是无状态的、确定性的，使用 `tmp_path` fixture 隔离文件系统，不依赖任何外部状态或执行顺序。
+- **可重复执行**：所有测试函数必须是无状态的、确定性的，不依赖任何外部状态或执行顺序。
 - **独立可运行**：每个测试函数可单独运行，无共享可变状态，无 setUp/tearDown 之间的依赖。
+- **数据目录隔离（强制）**：必须在 `tests/generated/conftest.py` 中定义 `client` fixture，在 fixture 内用 `tmp_path` 创建临时数据目录，并通过 `monkeypatch` 将 app 的存储层数据目录替换为该临时目录，确保每个测试函数使用完全独立的空数据库。所有需要 HTTP 客户端的测试函数必须接收 `client` fixture，不得自行实例化 TestClient。
 
 ---
 
@@ -37,7 +38,7 @@
 1. **正常路径（happy path）**：使用 FastAPI TestClient 发送合法请求，断言状态码为 2xx 且响应包含预期字段和值。
 2. **每个 error_case 对应一个测试函数**：发送触发该错误的请求，断言状态码及响应体中的错误信息文本（从 `overview_design.md` 的业务规则章节获取预期错误文本）。
 
-使用 TestClient 时，必须通过 `monkeypatch` 或依赖注入将存储目录替换为 `tmp_path`，确保测试间隔离。
+所有测试函数必须使用 `conftest.py` 中定义的 `client` fixture（已注入隔离的 tmp_path 数据目录），不得在测试函数内自行创建 TestClient。每个测试函数开始时数据库为空，测试函数自己负责准备所需的前置数据。
 
 ### business_rules — 每条业务规则生成两个测试函数
 1. **规则满足时**：验证操作成功执行。
@@ -48,26 +49,44 @@
 - 故意遗漏必填字段或填入无效类型值，用于测试输入校验（FastAPI 会返回 422）。
 
 ### csv_tables — 验证存储写入
-- 对每个写入操作（POST 成功后），读取对应 CSV 文件，断言新增行的字段值与请求一致。
-- 使用 `tmp_path` 作为存储根目录，避免污染真实数据。
+- 对每个写入操作（POST 成功后），读取 `client` fixture 注入的 tmp_path 数据目录中对应 CSV 文件，断言新增行的字段值与请求一致。
+- 必须使用与 `client` fixture 相同的 tmp_path 数据目录读取 CSV，不得另起一个 tmp_path。
 
 ### frontend_pages — 验证前端文件契约
-- 对每个前端页面（`path` 字段）：断言文件在项目目录中存在。
-- 读取 HTML 内容，断言 `controls` 列表中列出的关键控件存在（表单 `<form>`、按钮 `<button>` 及其关键文本、`<table>` 标签等）。
+- 对每个前端页面（`path` 字段）：断言文件存在（`Path(page_path).exists()`）。
+- 读取 HTML 内容，只检查 `controls` 列表中列出的**可见文本或标签类型**是否存在于 HTML 中（如 `<form`、`<button`、`<table`、中文标签文字），**严禁检查 HTML 属性名、input name、CSS class 等代码内部标识符**——这些在 code_manifest 中没有精确记录，检查它们会导致脆弱的测试。
 - 不启动浏览器、不起服务，只做文件内容字符串检查。
 
 ---
 
 ## 测试组织结构
 
-**必须**将测试分成以下四个文件：
+**必须**将测试分成以下五个文件：
 
 | 文件 | 内容 |
 |------|------|
+| `tests/generated/conftest.py` | `client` fixture：创建 tmp_path 数据目录，monkeypatch app 存储层，返回 TestClient |
 | `tests/generated/test_api_routes.py` | 每条路由 × 每个场景（正常 + 所有错误情况） |
 | `tests/generated/test_business_rules.py` | 每条业务规则 × 满足条件 + 违反条件 |
 | `tests/generated/test_storage.py` | 写操作后验证 CSV 行内容正确写入 |
-| `tests/generated/test_frontend_contract.py` | 前端文件存在性 + HTML 控件内容检查 |
+| `tests/generated/test_frontend_contract.py` | 前端文件存在性 + HTML 标签/可见文字检查 |
+
+**conftest.py 必须包含的内容（严格遵守）：**
+```python
+import pytest
+from pathlib import Path
+from fastapi.testclient import TestClient
+import src.api as app_module  # 根据 code_manifest 的实际模块路径调整
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    # 将 app 存储层的数据目录替换为 tmp_path，实现每个测试函数完全隔离
+    # 具体 monkeypatch 目标从 code_manifest 的存储层模块推断
+    # 例如：monkeypatch.setattr(app_module, "service", ServiceClass(tmp_path / "data"))
+    # 返回 TestClient(app_module.app)
+    ...
+```
+每个用到 HTTP 请求的测试函数签名必须包含 `client` 参数，从 conftest.py 注入。
 
 每个测试函数命名格式：`test_<被测对象>_<场景>`，例如：
 - `test_create_reservation_success`
@@ -82,6 +101,7 @@
 - 从 `code_manifest.json` 的 `api_routes[i].path` 推导出正确的 import 路径和 TestClient 调用路径。
 - 从 `data_models` 的字段名构造 payload，不要硬编码不存在的字段。
 - 错误消息文本从 `overview_design.md` 的"业务规则设计"和"出错处理设计"章节获取，不要猜测。
+- **HTTP 状态码必须从 `code_manifest.json` 的 `api_routes[i].error_cases` 和 `overview_design.md` 的第6章出错处理设计获取**，不得凭经验猜测（如不确定是 401 还是 403，必须以设计文档为准）。
 - 禁止在测试代码中调用外部 API、执行 shell 命令、启动真实网络服务或加载 LLM。
 
 ---

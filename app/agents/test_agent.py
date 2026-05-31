@@ -137,7 +137,7 @@ def test_cancellation_releases_quota(tmp_path):
 
 
 class GeneratedTestFile(BaseModel):
-    path: str = Field(pattern=r"^tests/generated/test_.+\.py$", description="Project-relative pytest file under tests/generated/")
+    path: str = Field(pattern=r"^tests/generated/(conftest|test_.+)\.py$", description="conftest.py or test_*.py under tests/generated/")
     content: str = Field(min_length=1, description="Complete pytest file contents")
 
 
@@ -257,8 +257,8 @@ class TestAgent(BaseAgent):
         test_root = (root / "tests" / "generated").resolve()
         if target != test_root and test_root not in target.parents:
             raise ValueError(f"Generated test path escapes tests/generated/: {generated_path}")
-        if target.suffix != ".py" or not target.name.startswith("test_"):
-            raise ValueError(f"Generated test file must be a test_*.py file: {generated_path}")
+        if target.suffix != ".py" or (not target.name.startswith("test_") and target.name != "conftest.py"):
+            raise ValueError(f"Generated test file must be conftest.py or test_*.py: {generated_path}")
         return target
 
     def _template_generation_result(self) -> TestGenerationResult:
