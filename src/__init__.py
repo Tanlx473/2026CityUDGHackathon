@@ -1,1 +1,3 @@
-"""Generated employee vehicle reservation business system."""
+from .api import app
+
+__all__ = ["app"]

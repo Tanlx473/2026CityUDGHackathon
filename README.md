@@ -107,9 +107,11 @@ CODE_MODEL=
 TEST_MODEL=
 APP_ENV=dev
 MAX_RETRIES=2
+LLM_STRICT=
 ```
 
 Use `.env.example` as a template. Do not commit `.env`. If `OPENAI_API_KEY` is missing, the system falls back to `MockLLMAdapter` and the main demo pipeline still runs.
+When `OPENAI_API_KEY` is set, `LLM_STRICT` defaults to enabled so API failures are surfaced instead of silently using fallback output. Set `LLM_STRICT=false` only when you explicitly want fallback behavior during demos.
 
 Logs filter key/token-like metadata and must not print full API keys.
 
@@ -173,16 +175,17 @@ The UI provides Markdown upload, auto/manual mode selection, batch status, execu
 Run:
 
 ```bash
-pytest -q
-pytest --cov=app --cov=src --cov-branch --cov-report=term-missing
+# Validate the current generated business app after a pipeline run.
+pytest -q tests/generated
+pytest -q tests/generated --cov=src --cov-branch --cov-report=term-missing
+
+# Validate platform/orchestrator code.
+pytest -q tests/test_state_and_storage.py tests/test_orchestrator_and_api.py
 ```
 
-Current local validation:
+`tests/generated/` is replaced by each `TestAgent` run and should match the current generated `src/` tree. Template-specific tests such as `tests/test_business_reservation.py` are skipped automatically when `src/` has been replaced by a dynamic LLM-generated app.
 
-- `16 passed`
-- Coverage: `82%`
-
-Tests do not require a real OpenAI API key.
+Most tests do not require a real OpenAI API key. Tests that exercise the OpenAI adapter use fake clients unless you start the full pipeline from the UI/API.
 
 ## Demonstration Workflow
 
@@ -193,7 +196,7 @@ Tests do not require a real OpenAI API key.
 5. Click `Start batch`.
 6. Watch nodes move through `design`, `code`, and `test`.
 7. Inspect `batch_status.json`, `execution_log.json`, and generated artifacts.
-8. Run `pytest -q`.
+8. Run `pytest -q tests/generated`.
 9. Demonstrate business scenarios:
    - successful reservation plus advance payment
    - duplicate plate or quota-exceeded failure

@@ -154,6 +154,7 @@ class Orchestrator:
                 message=f"{node_id} succeeded",
                 duration_ms=duration_ms,
                 retry_index=node.retries,
+                metadata=self._llm_metadata_for(node_id),
             )
             return state
         except Exception as exc:
@@ -171,6 +172,7 @@ class Orchestrator:
                 duration_ms=duration_ms,
                 retry_index=node.retries,
                 error_class=exc.__class__.__name__,
+                metadata=self._llm_metadata_for(node_id),
             )
             return state
 
@@ -195,6 +197,26 @@ class Orchestrator:
         if node_id == "code":
             return CodeValidator(self.store)
         return TestValidator(self.store)
+
+    def _llm_metadata_for(self, node_id: NodeId) -> dict[str, str | bool | None]:
+        last_call_metadata = getattr(self.llm, "last_call_metadata", None)
+        if last_call_metadata:
+            return last_call_metadata
+        settings = getattr(self.llm, "settings", None)
+        provider = getattr(self.llm, "provider_name", self.llm.__class__.__name__)
+        model = None
+        if settings is not None:
+            if node_id == "design":
+                model = getattr(settings, "design_model", None)
+            elif node_id == "code":
+                model = getattr(settings, "code_model", None)
+            elif node_id == "test":
+                model = getattr(settings, "test_model", None)
+        return {
+            "llm_provider": provider,
+            "llm_model": model,
+            "llm_strict": bool(getattr(settings, "llm_strict", False)) if settings is not None else False,
+        }
 
     def _new_batch_id(self) -> str:
         return f"{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"

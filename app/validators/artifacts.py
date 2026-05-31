@@ -44,7 +44,7 @@ class DesignArtifactValidator:
 
 
 class CodeValidator:
-    CORE_MODULES = ["src.csv_repository", "src.models", "src.services", "src.api"]
+    REQUIRED_FILES = {"__init__.py", "api.py"}
 
     def __init__(self, store: FileStore) -> None:
         self.store = store
@@ -53,17 +53,35 @@ class CodeValidator:
         src_dir = self.store.root_dir / "src"
         if not src_dir.exists():
             raise ValidationError("src/ does not exist")
-        python_files = sorted(src_dir.glob("*.py"))
-        names = {path.name for path in python_files}
-        required = {"__init__.py", "csv_repository.py", "models.py", "services.py", "api.py"}
-        missing = required - names
+        python_files = sorted(src_dir.rglob("*.py"))
+        names = {path.name for path in src_dir.glob("*.py")}
+        missing = self.REQUIRED_FILES - names
         if missing:
             raise ValidationError(f"src/ missing required files: {sorted(missing)}")
         for path in python_files:
             py_compile.compile(str(path), doraise=True)
-        for module in self.CORE_MODULES:
+        root = str(self.store.root_dir)
+        inserted = False
+        if root not in sys.path:
+            sys.path.insert(0, root)
+            inserted = True
+        previous_modules = {name: module for name, module in sys.modules.items() if name == "src" or name.startswith("src.")}
+        for name in previous_modules:
+            sys.modules.pop(name, None)
+        try:
             importlib.invalidate_caches()
-            importlib.import_module(module)
+            module = importlib.import_module("src.api")
+            if not hasattr(module, "app"):
+                raise ValidationError("src.api must expose a FastAPI app variable named app")
+        finally:
+            for name in [name for name in sys.modules if name == "src" or name.startswith("src.")]:
+                sys.modules.pop(name, None)
+            sys.modules.update(previous_modules)
+            if inserted:
+                try:
+                    sys.path.remove(root)
+                except ValueError:
+                    pass
         return {"validator": "code", "ok": True, "files": [path.name for path in python_files]}
 
 
@@ -72,18 +90,18 @@ class TestValidator:
         self.store = store
 
     def validate(self, batch_id: str) -> dict[str, Any]:
-        tests_dir = self.store.root_dir / "tests"
-        if not tests_dir.exists():
-            raise ValidationError("tests/ does not exist")
-        target = tests_dir / "test_business_reservation.py"
-        if not target.exists():
-            raise ValidationError("generated business test file is missing")
+        generated_dir = self.store.root_dir / "tests" / "generated"
+        if not generated_dir.exists():
+            raise ValidationError("tests/generated/ does not exist")
+        targets = sorted(path for path in generated_dir.rglob("test_*.py") if path.is_file())
+        if not targets:
+            raise ValidationError("generated pytest files are missing")
         command = [
             sys.executable,
             "-m",
             "pytest",
             "-q",
-            "tests/test_business_reservation.py",
+            "tests/generated",
             "--cov=src",
             "--cov-branch",
             "--cov-report=term-missing",

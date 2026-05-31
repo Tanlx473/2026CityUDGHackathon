@@ -6,12 +6,22 @@ import requests
 import streamlit as st
 
 
+st.set_page_config(page_title="AI Agent Development Pipeline Control Panel", layout="wide")
+
 API_BASE = st.sidebar.text_input("Backend URL", value="http://127.0.0.1:8000")
+REQUEST_TIMEOUT_SECONDS = st.sidebar.number_input(
+    "Request timeout (seconds)",
+    min_value=20,
+    max_value=300,
+    value=120,
+    step=10,
+)
 
 
 def api_request(method: str, path: str, **kwargs):
+    timeout = kwargs.pop("timeout", REQUEST_TIMEOUT_SECONDS)
     try:
-        response = requests.request(method, f"{API_BASE}{path}", timeout=20, **kwargs)
+        response = requests.request(method, f"{API_BASE}{path}", timeout=timeout, **kwargs)
         response.raise_for_status()
         return response
     except requests.RequestException as exc:
@@ -19,7 +29,6 @@ def api_request(method: str, path: str, **kwargs):
         return None
 
 
-st.set_page_config(page_title="AI Agent Development Pipeline Control Panel", layout="wide")
 st.title("AI Agent Development Pipeline Control Panel")
 
 if "batch_id" not in st.session_state:

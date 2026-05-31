@@ -72,11 +72,11 @@ def download_artifact(batch_id: str, path: str) -> FileResponse:
     return FileResponse(target, filename=target.name)
 
 
-@app.post("/api/v1/batches/{batch_id}/retry/{node_id}")
-def retry_node(batch_id: str, node_id: NodeId) -> dict[str, object]:
+@app.post("/api/v1/batches/{batch_id}/retry/{node_id}", status_code=202)
+def retry_node(batch_id: str, node_id: NodeId, background_tasks: BackgroundTasks) -> dict[str, str]:
     _load_state_or_404(batch_id)
-    state = orchestrator.retry_node(batch_id, node_id)
-    return state.model_dump(mode="json")
+    background_tasks.add_task(orchestrator.retry_node, batch_id, node_id)
+    return {"batch_id": batch_id, "node_id": node_id, "status": "accepted"}
 
 
 @app.post("/api/v1/validate")

@@ -4,6 +4,8 @@ import shutil
 from pathlib import Path
 from textwrap import dedent
 
+from pydantic import BaseModel, Field
+
 from app.agents.base import BaseAgent
 
 
@@ -336,32 +338,35 @@ def advance_payment(reservation_id: str) -> dict[str, object]:
 }
 
 
+class GeneratedCodeFile(BaseModel):
+    path: str = Field(pattern=r"^src/.+\.py$", description="Project-relative Python path under src/")
+    content: str = Field(min_length=1, description="Complete file contents")
+
+
+class CodeGenerationResult(BaseModel):
+    files: list[GeneratedCodeFile] = Field(min_length=1)
+    manifest: dict[str, object] = Field(default_factory=dict)
+
+
 class CodeAgent(BaseAgent):
     agent_name = "CodeAgent"
     prompt_file = "code_agent.md"
 
     def run(self, input_context: dict[str, str]) -> list[object]:
         batch_id = input_context["batch_id"]
-        src_dir = self.store.root_dir / "src"
-        src_dir.mkdir(parents=True, exist_ok=True)
-        for relative_path, content in BUSINESS_FILES.items():
-            self.store.write_text(src_dir / relative_path, dedent(content).lstrip("\n"))
+        spec_path = input_context["spec_path"]
+        result = self._generate_code(batch_id=batch_id, spec_path=spec_path)
 
-        code_manifest = {
-            "system_name": "Employee Temporary Vehicle Reservation System",
-            "strategy": "template-first",
-            "source_root": "src",
-            "modules": sorted(BUSINESS_FILES.keys()),
-            "entrypoint": "uvicorn src.api:app --reload",
-            "business_functions": ["campus configuration", "reservation", "cancellation", "advance payment", "query"],
-            "csv_tables": [
-                "campus_configs.csv",
-                "reservations.csv",
-                "ketuo_reservation_archive.csv",
-                "payment_records.csv",
-                "internal_vehicle_archive.csv",
-            ],
-        }
+        src_dir = self.store.root_dir / "src"
+        if src_dir.exists():
+            shutil.rmtree(src_dir)
+        src_dir.mkdir(parents=True, exist_ok=True)
+        written_refs = []
+        for generated_file in result.files:
+            target = self._safe_src_path(generated_file.path)
+            written_refs.append(self.store.write_text(target, generated_file.content))
+
+        code_manifest = self._code_manifest(result)
         output_dir = self.batch_artifact_dir(batch_id, "代码生成")
         manifest_ref = self.store.write_json(output_dir / "code_manifest.json", code_manifest)
 
@@ -369,5 +374,93 @@ class CodeAgent(BaseAgent):
         if snapshot_dir.exists():
             shutil.rmtree(snapshot_dir)
         shutil.copytree(src_dir, snapshot_dir)
-        snapshot_ref = self.store.artifact_for(snapshot_dir / "__init__.py", kind="src_snapshot")
-        return [manifest_ref, snapshot_ref]
+        snapshot_refs = [
+            self.store.artifact_for(path, kind="src_snapshot")
+            for path in sorted(snapshot_dir.rglob("*.py"))
+            if path.is_file()
+        ]
+        return [manifest_ref, *written_refs, *snapshot_refs]
+
+    def _generate_code(self, *, batch_id: str, spec_path: str) -> CodeGenerationResult:
+        prompt = self.load_prompt()
+        spec_text = self.read_text(spec_path)
+        overview = self._optional_batch_text(batch_id, "概要设计", "overview_design.md")
+        manifest = self._optional_batch_text(batch_id, "概要设计", "design_manifest.json")
+        user = (
+            "Generate a complete runnable FastAPI Python application from the product specification.\n"
+            "Return JSON only. Every file path must be project-relative and under src/.\n"
+            "Every files[].content value must be non-empty complete Python source code.\n"
+            "Required files: src/__init__.py and src/api.py. Prefer small modules such as src/models.py and src/services.py.\n"
+            "Do not include CSV, JSON, Markdown, config, binary, or data files in files[]; initialize local data from Python code.\n"
+            "Do not use external services, network calls, secrets, shell commands, or absolute paths.\n\n"
+            f"# Product specification\n{spec_text}\n\n"
+            f"# Design overview\n{overview}\n\n"
+            f"# Design manifest\n{manifest}\n"
+        )
+        metadata = {"batch_id": batch_id, "node_id": "code"}
+        try:
+            return self.llm.generate_json(system=prompt, user=user, schema=CodeGenerationResult, metadata=metadata)
+        except Exception:
+            if self._strict_mode():
+                raise
+            return self._template_generation_result()
+
+    def _strict_mode(self) -> bool:
+        adapter_settings = getattr(self.llm, "settings", None)
+        return bool(adapter_settings is not None and getattr(adapter_settings, "llm_strict", False))
+
+    def _optional_batch_text(self, batch_id: str, dirname: str, filename: str) -> str:
+        path = self.store.batch_dir(batch_id) / dirname / filename
+        if not path.exists():
+            return ""
+        return path.read_text(encoding="utf-8")
+
+    def _safe_src_path(self, generated_path: str) -> Path:
+        candidate = Path(generated_path)
+        if candidate.is_absolute():
+            raise ValueError(f"Generated path must be relative: {generated_path}")
+        if any(part in {"..", "", ".git"} for part in candidate.parts):
+            raise ValueError(f"Unsafe generated path: {generated_path}")
+        if not candidate.parts or candidate.parts[0] != "src":
+            raise ValueError(f"Generated path must be under src/: {generated_path}")
+        target = (self.store.root_dir / candidate).resolve()
+        src_root = (self.store.root_dir / "src").resolve()
+        if target != src_root and src_root not in target.parents:
+            raise ValueError(f"Generated path escapes src/: {generated_path}")
+        if target.suffix != ".py":
+            raise ValueError(f"Generated code file must be a Python file: {generated_path}")
+        return target
+
+    def _code_manifest(self, result: CodeGenerationResult) -> dict[str, object]:
+        manifest = {
+            "system_name": "Employee Temporary Vehicle Reservation System",
+            "strategy": "llm-structured-generation",
+            "source_root": "src",
+            "modules": sorted(file.path for file in result.files),
+            "entrypoint": "uvicorn src.api:app --reload",
+        }
+        manifest.update(result.manifest)
+        manifest["source_root"] = "src"
+        manifest["modules"] = sorted(file.path for file in result.files)
+        manifest.setdefault("entrypoint", "uvicorn src.api:app --reload")
+        return manifest
+
+    def _template_generation_result(self) -> CodeGenerationResult:
+        return CodeGenerationResult(
+            files=[
+                GeneratedCodeFile(path=f"src/{relative_path}", content=dedent(content).lstrip("\n"))
+                for relative_path, content in BUSINESS_FILES.items()
+            ],
+            manifest={
+                "system_name": "Employee Temporary Vehicle Reservation System",
+                "strategy": "template-fallback",
+                "business_functions": ["campus configuration", "reservation", "cancellation", "advance payment", "query"],
+                "csv_tables": [
+                    "campus_configs.csv",
+                    "reservations.csv",
+                    "ketuo_reservation_archive.csv",
+                    "payment_records.csv",
+                    "internal_vehicle_archive.csv",
+                ],
+            },
+        )
