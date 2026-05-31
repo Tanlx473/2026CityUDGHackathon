@@ -4,11 +4,17 @@ from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
+from app.orchestrator.best_of import BestOfSelector
 from app.orchestrator.engine import Orchestrator
 from app.orchestrator.state import NodeId
 from app.storage.file_store import FileStore
 from app.validators.artifacts import validate_batch_smoke
+
+
+class BestOfRequest(BaseModel):
+    batch_ids: list[str] = Field(min_length=2, description="At least 2 batch IDs to compare")
 
 
 app = FastAPI(title="AI Agent Development Pipeline API")
@@ -100,6 +106,71 @@ def validate(payload: dict[str, str]) -> dict[str, object]:
         return {"batch_id": batch_id, "validation": validate_batch_smoke(store, batch_id)}
     except Exception as exc:
         raise HTTPException(status_code=400, detail={"message": str(exc), "error_class": exc.__class__.__name__}) from exc
+
+
+@app.get("/api/v1/batches")
+def list_batches() -> list[dict[str, object]]:
+    """Return summary of all batches, sorted newest-first."""
+    generated_dir = store.generated_dir
+    if not generated_dir.exists():
+        return []
+    summaries = []
+    for batch_dir in sorted(generated_dir.iterdir(), reverse=True):
+        status_file = batch_dir / "batch_status.json"
+        if not batch_dir.is_dir() or not status_file.exists():
+            continue
+        try:
+            data = store.read_json(status_file)
+            summaries.append({
+                "batch_id": data.get("batch_id"),
+                "status": data.get("status"),
+                "current_node": data.get("current_node"),
+                "spec_path": data.get("spec_path"),
+            })
+        except Exception:
+            continue
+    return summaries
+
+
+@app.get("/api/v1/batches/{batch_id}/score")
+def score_batch(batch_id: str) -> dict[str, object]:
+    """Return the design quality score for a single succeeded batch."""
+    _load_state_or_404(batch_id)
+    selector = BestOfSelector(store)
+    return selector.score_design(batch_id)
+
+
+@app.post("/api/v1/batches/best-of", status_code=202)
+def best_of_batches(payload: BestOfRequest, background_tasks: BackgroundTasks) -> dict[str, object]:
+    """Score each batch's design artifact, seed a new batch from the winner, and run code + test.
+
+    The new batch skips design (pre-seeded from the winner) and starts fresh
+    from code generation, so it produces internally consistent code and tests.
+    """
+    for bid in payload.batch_ids:
+        _load_state_or_404(bid)
+
+    selector = BestOfSelector(store)
+    scores = selector.score_batches(payload.batch_ids)
+    winner = selector.pick_winner(scores)
+
+    if winner is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"message": "No batch with a valid succeeded design node found", "scores": scores},
+        )
+
+    new_state = selector.create_seeded_batch(winner["batch_id"])
+    background_tasks.add_task(orchestrator.run_batch, new_state.batch_id)
+
+    return {
+        "new_batch_id": new_state.batch_id,
+        "winner_batch_id": winner["batch_id"],
+        "winner_score": winner["score"],
+        "winner_breakdown": winner.get("breakdown", {}),
+        "scores": scores,
+        "status": "accepted",
+    }
 
 
 def _load_state_or_404(batch_id: str):
