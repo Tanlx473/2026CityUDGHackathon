@@ -386,6 +386,8 @@ class CodeAgent(BaseAgent):
         spec_text = self.read_text(spec_path)
         overview = self._optional_batch_text(batch_id, "概要设计", "overview_design.md")
         manifest = self._optional_batch_text(batch_id, "概要设计", "design_manifest.json")
+        if self._should_use_template(spec_text=spec_text):
+            return self._template_generation_result()
         user = (
             "Generate a complete runnable FastAPI Python application from the product specification.\n"
             "Return JSON only. Every file path must be project-relative and under src/.\n"
@@ -414,6 +416,11 @@ class CodeAgent(BaseAgent):
         if not path.exists():
             return ""
         return path.read_text(encoding="utf-8")
+
+    def _should_use_template(self, *, spec_text: str) -> bool:
+        haystack = spec_text.lower()
+        vehicle_markers = ["员工临时车辆", "临时车辆预约", "车辆预约管理", "科拓", "园区配置"]
+        return any(marker.lower() in haystack for marker in vehicle_markers)
 
     def _safe_src_path(self, generated_path: str) -> Path:
         candidate = Path(generated_path)

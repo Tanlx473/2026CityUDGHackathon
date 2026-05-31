@@ -1,3 +1,1 @@
-from .api import app
-
-__all__ = ["app"]
+"""Generated employee vehicle reservation business system."""

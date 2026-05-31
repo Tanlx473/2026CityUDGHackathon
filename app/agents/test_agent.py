@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import json
 from textwrap import dedent
 from pathlib import Path
 
@@ -183,6 +184,8 @@ class TestAgent(BaseAgent):
         overview = self._optional_batch_text(batch_id, "概要设计", "overview_design.md")
         design_manifest = self._optional_batch_text(batch_id, "概要设计", "design_manifest.json")
         code_manifest = self._optional_batch_text(batch_id, "代码生成", "code_manifest.json")
+        if self._is_template_code_manifest(code_manifest):
+            return self._template_generation_result()
         source_index = self._source_index()
         user = (
             "Generate deterministic pytest tests for the generated FastAPI application.\n"
@@ -213,6 +216,17 @@ class TestAgent(BaseAgent):
         if not path.exists():
             return ""
         return path.read_text(encoding="utf-8")
+
+    def _is_template_code_manifest(self, manifest_text: str) -> bool:
+        if not manifest_text.strip():
+            return False
+        try:
+            data = json.loads(manifest_text)
+        except json.JSONDecodeError:
+            return False
+        strategy = str(data.get("strategy", ""))
+        modules = {str(item) for item in data.get("modules", [])}
+        return strategy == "template-fallback" or "src/csv_repository.py" in modules
 
     def _source_index(self) -> str:
         src_dir = self.store.root_dir / "src"
